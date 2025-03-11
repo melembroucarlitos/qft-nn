@@ -1,8 +1,8 @@
 import torch
 from torch.autograd.functional import jacobian
 
-model = torch.nn.Linear(5, 2, dtype=float)
-foo = torch.tensor([4, 3, 2, 1, 8], dtype=None)
+model = torch.nn.Linear(5, 2, dtype=torch.float)
+foo = torch.tensor([4, 3, 2, 1, 8], dtype=torch.float)
 
 baz = jacobian(model, foo)
 
