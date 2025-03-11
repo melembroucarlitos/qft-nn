@@ -1,0 +1,33 @@
+name: Quality Assurance
+
+on:
+  pull_request:
+    branches: [ main, master ]
+  push:
+    branches: [ main, master ]
+
+jobs:
+  quality-checks:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        python -m pip install -e ".[dev]"
+        
+    - name: Run type checking
+      run: bash dev_scripts/type_check.sh
+      
+    - name: Run code formatting check
+      run: bash dev_scripts/format.sh
+      
+    - name: Run tests
+      run: bash dev_scripts/test.sh
