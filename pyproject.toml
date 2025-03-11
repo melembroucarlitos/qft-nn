@@ -10,7 +10,15 @@ packages = ["qft_nn"]
 name = "qft_nn"
 version = "0.1"
 description = "Repo for exploring qft-nn correspondence for interpretability"
+
 dependencies = [
     "torch",
     "numpy"
+]
+
+[project.optional-dependencies]
+dev = [
+    "black",
+    "mypy",
+    "pytest"
 ]

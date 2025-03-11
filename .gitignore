@@ -1,3 +1,5 @@
 .venv
+.mypy_cache
+.pytest_cache
 qft_nn.egg-info
 **/__pycache__
