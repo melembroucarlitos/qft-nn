@@ -1,12 +1,12 @@
 import torch
-import numpy
+import numpy as np
 from jaxtyping import Float
 from typing import Callable
 
 
 def compute_empirical_ntk(
-    model: torch.Model,
-    loss: Callable[[], float],
+    model: torch.nn.Module,
+    loss: Callable, # TODO: Flesh out full type signature
     data: Float[torch.Tensor, "data_dim num_data"],
-) -> Float[numpy.float, "num_data num_param"]:
+) -> Float[np.ndarray, "num_data num_data"]:
     raise NotImplementedError
