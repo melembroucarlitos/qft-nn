@@ -13,7 +13,9 @@ description = "Repo for exploring qft-nn correspondence for interpretability"
 
 dependencies = [
     "torch",
-    "numpy"
+    "numpy",
+    "tqdm",
+    "einops",
 ]
 
 [project.optional-dependencies]
