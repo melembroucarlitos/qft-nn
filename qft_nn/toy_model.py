@@ -8,6 +8,7 @@ from jaxtyping import Float
 import torch
 import torch.nn.functional as F
 from tqdm import tqdm
+import yaml
 
 
 def linear_lr(step, steps):
@@ -21,25 +22,35 @@ def cosine_decay_lr(step, steps):
 
 
 @dataclass
-class Config:
+class SingleLayerToyReLUModelConfig:
     # We optimize n_instances models in a single training loop to let us sweep over
     # sparsity or importance curves  efficiently. You should treat `n_instances` as
     # kinda like a batch dimension, but one which is built into our training setup.
     n_instances: int
-    n_features: int = 5
-    n_hidden: int = 2
-    n_correlated_pairs: int = 0
-    n_anticorrelated_pairs: int = 0
+    n_features: int
+    n_hidden: int
+    n_correlated_pairs: int
+    n_anticorrelated_pairs: int
+
+    @classmethod
+    def from_yaml(cls, filepath: str) -> "SingleLayerToyReLUModelConfig":
+        with open(filepath, 'r') as file:
+            config_dict = yaml.safe_load(file)
+
+        if "SingleLayerToyReLUModelConfig" in config_dict:
+            config_dict = config_dict["SingleLayerToyReLUModelConfig"]
+            
+        return cls(**config_dict)
 
 
-class Model(torch.nn.Module):
+class SingleLayerToyReLUModel(torch.nn.Module):
     W: Float[torch.Tensor, "n_instances n_hidden n_features"]
     b_final: Float[torch.Tensor, "n_instances n_features"]
     # Our linear map is x -> ReLU(W.T @ W @ x + b_final)
 
     def __init__(
         self,
-        cfg: Config,
+        cfg: SingleLayerToyReLUModelConfig,
         device: torch.types.Device,
         feature_probability: Optional[Union[float, torch.Tensor]] = None,
         importance: Optional[Union[float, torch.Tensor]] = None,
