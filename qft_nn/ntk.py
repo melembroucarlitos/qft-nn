@@ -1,5 +1,5 @@
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset
 import numpy as np
 from jaxtyping import Float
 from typing import Optional
@@ -8,12 +8,12 @@ from typing import Optional
 def compute_empirical_ntk(
     model: torch.nn.Module,
     criterion: torch.nn.modules.loss._Loss,
-    data: Float[torch.Tensor, "data_dim num_data"],
+    data: Dataset,
     batch_size: Optional[int] = None
 ) -> Float[np.ndarray, "num_data num_data"]:
     # Prepare data
     if batch_size is None:
-        dataloader = DataLoader(data, batch_size=len(data))
+        dataloader: DataLoader = DataLoader(data, batch_size=len(data))  # type: ignore
         X, y = next(iter(dataloader))
     else:
         dataloader = DataLoader(data, batch_size=batch_size)
@@ -44,6 +44,8 @@ def compute_empirical_ntk(
         # Extract gradients
         idx = 0
         for param in parameters:
+            if param.grad is None:
+                raise RuntimeError(f"Parameter '{_find_param_name(model=model, parameter=param)}' has None gradient. This may happen if the parameter is not part of the computation graph or if you're using a detached tensor.")
             grad_flatten = param.grad.flatten()
             jacobian[i, idx:idx+len(grad_flatten)] = grad_flatten
             idx += len(grad_flatten)
@@ -51,3 +53,9 @@ def compute_empirical_ntk(
     # ENTK: K(x, x') = J(x) · J(x')^T
     entk_matrix = jacobian @ jacobian.T
     return entk_matrix.detach().numpy()
+
+def _find_param_name(model: torch.nn.Module, parameter: torch.nn.Parameter) -> Optional[str]:
+    for name, p in model.named_parameters():
+        if p is parameter:
+            return name
+    return None
