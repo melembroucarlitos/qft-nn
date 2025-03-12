@@ -20,5 +20,6 @@ dependencies = [
 dev = [
     "black",
     "mypy",
-    "pytest"
+    "pytest",
+    "jaxtyping",
 ]
