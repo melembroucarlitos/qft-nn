@@ -16,6 +16,7 @@ dependencies = [
     "numpy",
     "tqdm",
     "einops",
+    "fire,
 ]
 
 [project.optional-dependencies]
