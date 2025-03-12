@@ -6,7 +6,7 @@ import numpy as np
 from qft_nn.ntk import compute_empirical_ntk
 
 def test_compute_empirical_ntk():
-    # Incorrect type signatures
+    # TODO: Incorrect type signatures
     # Simple Linear Model, MSE loss
 
     class SimpleLinear(nn.Module):
@@ -56,22 +56,22 @@ def test_compute_empirical_ntk():
     #                  = 4*(pred_i - target_i)*(pred_j - target_j)*([x_i, 1]·[x_j, 1])
     #                  = 4*(pred_i - target_i)*(pred_j - target_j)*(x_i·x_j + 1)
 
-    ground_truth_ntk = np.zeros((3, 3))
+    ground_truth_entk = np.zeros((3, 3))
     for i in range(3):
         for j in range(3):
             error_i = model.forward(X[i]) - y[i].item()
             error_j = model.forward(X[j]) - y[j].item()
             feature_similarity = torch.dot(X[i], X[j]).item()
 
-            ground_truth_ntk[i, j] = 4 * error_i * error_j * (feature_similarity + 1.0)
+            ground_truth_entk[i, j] = 4 * error_i * error_j * (feature_similarity + 1.0)
     
     # Compute empirical NTK
-    ntk_matrix = compute_empirical_ntk(model, criterion, dataset)
+    entk = compute_empirical_ntk(model, criterion, dataset)
 
     # Check if computed NTK matches ground truth
-    np.testing.assert_allclose(ntk_matrix, ground_truth_ntk, rtol=1e-5)
+    np.testing.assert_allclose(entk, ground_truth_entk, rtol=1e-5)
 
-    # 2 Layer MLP, MSE loss
+    # TODO: 2 Layer MLP, MSE loss
 
 if __name__ == "__main__":
     test_compute_empirical_ntk()
