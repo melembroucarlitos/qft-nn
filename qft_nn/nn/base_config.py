@@ -20,3 +20,4 @@ class TrainConfig(Config):
     log_freq: int
     lr: float
     lr_scale: Callable[[int, int], float]
+    data_seed: int

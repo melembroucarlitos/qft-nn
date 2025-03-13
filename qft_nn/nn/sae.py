@@ -9,6 +9,7 @@ import einops
 
 from qft_nn.nn.base_config import Config, TrainConfig
 from qft_nn.nn.lr_schedules import constant_lr
+from qft_nn.nn.toy_model import SingleLayerToyReLUModel
 
 class AutoEncoderConfig(Config):
     n_input_ae: int
@@ -122,7 +123,7 @@ class AutoEncoder(torch.nn.Module):
 
     def optimize(
         self,
-        model: torch.nn.Module,
+        model: SingleLayerToyReLUModel,
         batch_size: int = 1024,
         steps: int = 10_000,
         log_freq: int = 100,

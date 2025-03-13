@@ -59,10 +59,14 @@ class SingleLayerToyReLUModel(torch.nn.Module):
         return F.relu(out + self.b_final)
 
 
-    def generate_batch(self, batch_size) -> Float[torch.Tensor, "batch_size instances features"]:
+    def generate_batch(self, batch_size: int, deterministic: bool=True) -> Float[torch.Tensor, "batch instances features"]:
         '''
         Generates a batch of data. We'll return to this function later when we apply correlations.
         '''
+        
+        if deterministic:
+            torch.manual_seed(self.cfg.train.data_seed)
+        
         feat = torch.rand((batch_size, self.cfg.train.n_instances, self.cfg.n_features), device=self.W.device)
         feat_seeds = torch.rand((batch_size, self.cfg.train.n_instances, self.cfg.n_features), device=self.W.device)
         feat_is_present = feat_seeds <= self.feature_probability
@@ -91,38 +95,31 @@ class SingleLayerToyReLUModel(torch.nn.Module):
         return loss
 
 
-    def optimize(
-        self,
-        batch_size: int = 1024,
-        steps: int = 10_000,
-        log_freq: int = 100,
-        lr: float = 1e-3,
-        lr_scale: Callable[[int, int], float] = constant_lr,
-    ):
+    def optimize(self):
         '''
         Optimizes the model using the given hyperparameters.
         '''
-        optimizer = torch.optim.Adam(list(self.parameters()), lr=lr)
+        optimizer = torch.optim.Adam(list(self.parameters()), lr=self.cfg.train.lr)
 
-        progress_bar = tqdm(range(steps))
+        progress_bar = tqdm(range(self.cfg.train.steps))
 
         for step in progress_bar:
 
             # Update learning rate
-            step_lr = lr * lr_scale(step, steps)
+            step_lr = self.cfg.train.lr * self.cfg.train.lr_scale(step, self.cfg.train.steps)
             for group in optimizer.param_groups:
                 group['lr'] = step_lr
 
             # Optimize
             optimizer.zero_grad()
-            batch = self.generate_batch(batch_size)
+            batch = self.generate_batch(self.cfg.train.batch_size)
             out = self(batch)
             loss = self.calculate_loss(out, batch)
             loss.backward()
             optimizer.step()
 
             # Display progress bar
-            if step % log_freq == 0 or (step + 1 == steps):
+            if step % self.cfg.train.log_freq == 0 or (step + 1 == self.cfg.train.steps):
                 progress_bar.set_postfix(loss=loss.item()/self.cfg.train.n_instances, lr=step_lr)
 
 if __name__ == "__main__":
@@ -132,7 +129,8 @@ if __name__ == "__main__":
         steps=10_000,
         log_freq=100,
         lr=1e-3,
-        lr_scale=constant_lr
+        lr_scale=constant_lr,
+        data_seed=1337
     )
 
     model_config = SingleLayerToyReLUModelConfig(
@@ -154,13 +152,7 @@ if __name__ == "__main__":
         print(f"Test loss: {test_loss.item()/model.cfg.train.n_instances:.6f}")
 
     # Run optimization
-    model.optimize(
-        batch_size=model_config.train.batch_size,
-        steps=model_config.train.steps,
-        log_freq=model_config.train.log_freq,
-        lr=model_config.train.lr,
-        lr_scale=model_config.train.lr_scale
-    )
+    model.optimize()
 
     # Test the model after training
     with torch.no_grad():
