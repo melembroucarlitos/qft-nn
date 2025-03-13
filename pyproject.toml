@@ -16,7 +16,7 @@ dependencies = [
     "numpy",
     "tqdm",
     "einops",
-    "fire,
+    "fire",
     "pydantic",
 ]
 
