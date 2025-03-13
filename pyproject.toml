@@ -19,6 +19,8 @@ dependencies = [
     "fire",
     "pydantic",
     "pyyaml",
+    "matplotlib",
+    "seaborn",
 ]
 
 [project.optional-dependencies]
