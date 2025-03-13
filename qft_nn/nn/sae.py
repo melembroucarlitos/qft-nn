@@ -195,6 +195,14 @@ class AutoEncoder(torch.nn.Module):
 
         return data_log
     
+def extract_toy_model_activations(toy_model: SingleLayerToyReLUModel, sae: AutoEncoder, batch_size: int) -> Float[torch.Tensor, ""]:
+    with torch.inference_mode():
+        features = toy_model.generate_batch(batch_size)
+        h = einops.einsum(features, toy_model.W, "... instances features, instances hidden features -> ... instances hidden")
+        _, _, _, acts, _ = sae.forward(h)
+    return acts.squeeze(1)
+
+
 if __name__ == "__main__":
     train_config = TrainConfig(
         n_instances=1,
@@ -215,8 +223,8 @@ if __name__ == "__main__":
     )
 
     sae_config = AutoEncoderConfig(
-        n_input_ae = 5,
-        n_hidden_ae = 12,
+        n_input_ae = 32,
+        n_hidden_ae = 64,
         l1_coeff = 1.0,
         tied_weights = False,
         train=train_config,
@@ -225,3 +233,6 @@ if __name__ == "__main__":
     toy_model = SingleLayerToyReLUModel(cfg=toy_model_config, device='cpu')
     sae = AutoEncoder(cfg=sae_config, device='cpu')
     sae.optimize(model=toy_model)
+
+    foo = extract_toy_model_activations(toy_model=toy_model, sae=sae, batch_size=1024)
+    print(foo)
