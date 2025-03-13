@@ -7,15 +7,15 @@ import torch.nn.functional as F
 from tqdm import tqdm
 import einops
 
-from qft_nn.nn.base_config import Config
+from qft_nn.nn.base_config import Config, TrainConfig
 from qft_nn.nn.lr_schedules import constant_lr
 
 class AutoEncoderConfig(Config):
-    n_instances: int
     n_input_ae: int
     n_hidden_ae: int
     l1_coeff: float = 1.0
     tied_weights: bool = False
+    train: TrainConfig
 
 class AutoEncoder(torch.nn.Module):
     W_enc: Float[torch.Tensor, "n_instances n_input_ae n_hidden_ae"]

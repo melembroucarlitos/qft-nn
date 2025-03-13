@@ -7,18 +7,15 @@ import torch
 import torch.nn.functional as F
 from tqdm import tqdm
 
-from qft_nn.nn.base_config import Config
+from qft_nn.nn.base_config import Config, TrainConfig
 from qft_nn.nn.lr_schedules import constant_lr
 
 class SingleLayerToyReLUModelConfig(Config):
-    # We optimize n_instances models in a single training loop to let us sweep over
-    # sparsity or importance curves  efficiently. You should treat `n_instances` as
-    # kinda like a batch dimension, but one which is built into our training setup.
-    n_instances: int
     n_features: int
     n_hidden: int
     n_correlated_pairs: int
     n_anticorrelated_pairs: int
+    train: TrainConfig
 
 class SingleLayerToyReLUModel(torch.nn.Module):
     W: Float[torch.Tensor, "n_instances n_hidden n_features"]
