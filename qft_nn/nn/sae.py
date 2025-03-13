@@ -9,7 +9,7 @@ import einops
 
 from qft_nn.nn.base_config import Config, TrainConfig
 from qft_nn.nn.lr_schedules import constant_lr
-from qft_nn.nn.toy_model import SingleLayerToyReLUModel
+from qft_nn.nn.toy_model import SingleLayerToyReLUModel, SingleLayerToyReLUModelConfig
 
 class AutoEncoderConfig(Config):
     n_input_ae: int
@@ -194,3 +194,34 @@ class AutoEncoder(torch.nn.Module):
                 data_log["frac_active"].append(frac_active.detach().cpu())
 
         return data_log
+    
+if __name__ == "__main__":
+    train_config = TrainConfig(
+        n_instances=1,
+        batch_size=1024,
+        steps=10_000,
+        log_freq=100,
+        lr=1e-3,
+        lr_scale=constant_lr,
+        data_seed=1337
+    )
+
+    toy_model_config = SingleLayerToyReLUModelConfig(
+        n_features=5,
+        n_hidden=32,
+        n_correlated_pairs=2,
+        n_anticorrelated_pairs=1,
+        train=train_config
+    )
+
+    sae_config = AutoEncoderConfig(
+        n_input_ae = 5,
+        n_hidden_ae = 12,
+        l1_coeff = 1.0,
+        tied_weights = False,
+        train=train_config,
+    )
+
+    toy_model = SingleLayerToyReLUModel(cfg=toy_model_config, device='cpu')
+    sae = AutoEncoder(cfg=sae_config, device='cpu')
+    sae.optimize(model=toy_model)
