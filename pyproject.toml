@@ -18,6 +18,7 @@ dependencies = [
     "einops",
     "fire",
     "pydantic",
+    "pyyaml",
 ]
 
 [project.optional-dependencies]
