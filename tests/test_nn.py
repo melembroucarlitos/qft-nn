@@ -1,8 +1,10 @@
 import pathlib
+import torch
 import tempfile
 import pytest
+from unittest.mock import patch, MagicMock
 
-from qft_nn.nn.toy_model import SingleLayerToyReLUModelConfig 
+from qft_nn.nn.toy_model import SingleLayerToyReLUModelConfig, SingleLayerToyReLUModel
 
 # Test Config.from_yaml
 
@@ -74,3 +76,46 @@ def test_from_yaml_missing_fields():
 
 
 # Test Optimization
+
+@pytest.fixture
+def model():
+    # Create a config for our model
+    config = SingleLayerToyReLUModelConfig(
+        n_instances=2,
+        n_features=10,
+        n_hidden=5,
+        n_correlated_pairs=0,
+        n_anticorrelated_pairs=0
+    )
+    
+    # Create the model
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    return SingleLayerToyReLUModel(cfg=config, device=device)
+
+def test_optimize_decreases_loss(model):
+    """Test that the optimization process decreases the loss over time."""
+    # Run optimization for a small number of steps
+    with patch('qft_nn.nn.toy_model.tqdm') as mock_tqdm:
+        mock_progress = MagicMock()
+        mock_tqdm.return_value = mock_progress
+        mock_progress.__iter__.return_value = range(50)
+        
+        # Capture loss values during optimization
+        losses = []
+        
+        def custom_set_postfix(**kwargs):
+            losses.append(kwargs['loss'])
+        
+        mock_progress.set_postfix.side_effect = custom_set_postfix
+        
+        # Run optimization
+        model.optimize(batch_size=32, steps=50, log_freq=10, lr=0.01)
+        
+        # Verify tqdm was called correctly
+        mock_tqdm.assert_called_once()
+        
+        # Check that we have some loss values recorded
+        assert len(losses) > 0
+        
+        # Check that loss decreased
+        assert losses[-1] < losses[0]
