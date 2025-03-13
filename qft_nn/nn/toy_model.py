@@ -34,13 +34,13 @@ class SingleLayerToyReLUModel(torch.nn.Module):
 
         if feature_probability is None: feature_probability = torch.ones(())
         if isinstance(feature_probability, float): feature_probability = torch.tensor(feature_probability)
-        self.feature_probability = feature_probability.to(device).broadcast_to((cfg.n_instances, cfg.n_features))
+        self.feature_probability = feature_probability.to(device).broadcast_to((cfg.train.n_instances, cfg.n_features))
         if importance is None: importance = torch.ones(())
         if isinstance(importance, float): importance = torch.tensor(importance)
-        self.importance = importance.to(device).broadcast_to((cfg.n_instances, cfg.n_features))
+        self.importance = importance.to(device).broadcast_to((cfg.train.n_instances, cfg.n_features))
 
-        self.W = torch.nn.Parameter(torch.nn.init.xavier_normal_(torch.empty((cfg.n_instances, cfg.n_hidden, cfg.n_features))))
-        self.b_final = torch.nn.Parameter(torch.zeros((cfg.n_instances, cfg.n_features)))
+        self.W = torch.nn.Parameter(torch.nn.init.xavier_normal_(torch.empty((cfg.train.n_instances, cfg.n_hidden, cfg.n_features))))
+        self.b_final = torch.nn.Parameter(torch.zeros((cfg.train.n_instances, cfg.n_features)))
         self.to(device)
 
 
@@ -63,8 +63,8 @@ class SingleLayerToyReLUModel(torch.nn.Module):
         '''
         Generates a batch of data. We'll return to this function later when we apply correlations.
         '''
-        feat = torch.rand((batch_size, self.cfg.n_instances, self.cfg.n_features), device=self.W.device)
-        feat_seeds = torch.rand((batch_size, self.cfg.n_instances, self.cfg.n_features), device=self.W.device)
+        feat = torch.rand((batch_size, self.cfg.train.n_instances, self.cfg.n_features), device=self.W.device)
+        feat_seeds = torch.rand((batch_size, self.cfg.train.n_instances, self.cfg.n_features), device=self.W.device)
         feat_is_present = feat_seeds <= self.feature_probability
         batch = torch.where(
             feat_is_present,
@@ -123,4 +123,48 @@ class SingleLayerToyReLUModel(torch.nn.Module):
 
             # Display progress bar
             if step % log_freq == 0 or (step + 1 == steps):
-                progress_bar.set_postfix(loss=loss.item()/self.cfg.n_instances, lr=step_lr)
+                progress_bar.set_postfix(loss=loss.item()/self.cfg.train.n_instances, lr=step_lr)
+
+if __name__ == "__main__":
+    train_config = TrainConfig(
+        n_instances=1,
+        batch_size=1024,
+        steps=10_000,
+        log_freq=100,
+        lr=1e-3,
+        lr_scale=constant_lr
+    )
+
+    model_config = SingleLayerToyReLUModelConfig(
+        n_features=5,
+        n_hidden=32,
+        n_correlated_pairs=2,
+        n_anticorrelated_pairs=1,
+        train=train_config
+    )
+
+    # Instantiate the model
+    model = SingleLayerToyReLUModel(cfg=model_config, device='cpu')
+    
+    # Test the model before training
+    with torch.no_grad():
+        test_batch = model.generate_batch(1000)
+        test_output = model(test_batch)
+        test_loss = model.calculate_loss(test_output, test_batch)
+        print(f"Test loss: {test_loss.item()/model.cfg.train.n_instances:.6f}")
+
+    # Run optimization
+    model.optimize(
+        batch_size=model_config.train.batch_size,
+        steps=model_config.train.steps,
+        log_freq=model_config.train.log_freq,
+        lr=model_config.train.lr,
+        lr_scale=model_config.train.lr_scale
+    )
+
+    # Test the model after training
+    with torch.no_grad():
+        test_batch = model.generate_batch(1000)
+        test_output = model(test_batch)
+        test_loss = model.calculate_loss(test_output, test_batch)
+        print(f"Test loss: {test_loss.item()/model.cfg.train.n_instances:.6f}")
