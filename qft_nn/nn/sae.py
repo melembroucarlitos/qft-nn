@@ -9,6 +9,8 @@ from tqdm import tqdm
 import einops
 import numpy as np
 
+from qft_nn.nn.base_config import Config
+
 def linear_lr(step, steps):
     return (1 - (step / steps))
 
@@ -18,8 +20,7 @@ def constant_lr(*_):
 def cosine_decay_lr(step, steps):
     return np.cos(0.5 * np.pi * step / (steps - 1))
 
-@dataclass
-class AutoEncoderConfig:
+class AutoEncoderConfig(Config):
     n_instances: int
     n_input_ae: int
     n_hidden_ae: int

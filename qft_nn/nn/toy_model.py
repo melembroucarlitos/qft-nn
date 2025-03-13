@@ -1,6 +1,5 @@
 # Adapted from ARENA's TMS & SAE Solution notebook, (https://colab.research.google.com/drive/1rPy82rL3iZzy2_Rd3F82RwFhlVnnroIh?usp=sharing, March 11 2025)
 
-from dataclasses import dataclass
 from typing import Callable, Optional, Union
 from einops import einops
 import numpy as np
@@ -8,7 +7,8 @@ from jaxtyping import Float
 import torch
 import torch.nn.functional as F
 from tqdm import tqdm
-import yaml
+
+from qft_nn.nn.base_config import Config
 
 
 def linear_lr(step, steps):
@@ -21,8 +21,7 @@ def cosine_decay_lr(step, steps):
     return np.cos(0.5 * np.pi * step / (steps - 1))
 
 
-@dataclass
-class SingleLayerToyReLUModelConfig:
+class SingleLayerToyReLUModelConfig(Config):
     # We optimize n_instances models in a single training loop to let us sweep over
     # sparsity or importance curves  efficiently. You should treat `n_instances` as
     # kinda like a batch dimension, but one which is built into our training setup.
@@ -31,17 +30,6 @@ class SingleLayerToyReLUModelConfig:
     n_hidden: int
     n_correlated_pairs: int
     n_anticorrelated_pairs: int
-
-    @classmethod
-    def from_yaml(cls, filepath: str) -> "SingleLayerToyReLUModelConfig":
-        with open(filepath, 'r') as file:
-            config_dict = yaml.safe_load(file)
-
-        if "SingleLayerToyReLUModelConfig" in config_dict:
-            config_dict = config_dict["SingleLayerToyReLUModelConfig"]
-            
-        return cls(**config_dict)
-
 
 class SingleLayerToyReLUModel(torch.nn.Module):
     W: Float[torch.Tensor, "n_instances n_hidden n_features"]
