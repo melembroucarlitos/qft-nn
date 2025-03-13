@@ -4,6 +4,8 @@ import tempfile
 import pytest
 from unittest.mock import patch, MagicMock
 
+from qft_nn.nn.base_config import TrainConfig
+from qft_nn.nn.lr_schedules import constant_lr
 from qft_nn.nn.toy_model import SingleLayerToyReLUModelConfig, SingleLayerToyReLUModel
 
 # Test Config.from_yaml
@@ -119,3 +121,38 @@ def test_optimize_decreases_loss(model):
         
         # Check that loss decreased
         assert losses[-1] < losses[0]
+
+def test_conditional_determinism_in_data_generation():
+    train_config = TrainConfig(
+        n_instances=1,
+        batch_size=1024,
+        steps=10_000,
+        log_freq=100,
+        lr=1e-3,
+        lr_scale=constant_lr,
+        data_seed=1337
+    )
+
+    model_config = SingleLayerToyReLUModelConfig(
+        n_features=5,
+        n_hidden=32,
+        n_correlated_pairs=2,
+        n_anticorrelated_pairs=1,
+        train=train_config
+    )
+
+    # Instantiate the model
+    model = SingleLayerToyReLUModel(cfg=model_config, device='cpu')
+
+    batch_size = 1000
+    
+    batch1 = model.generate_batch(batch_size=batch_size, deterministic=True)
+    batch2 = model.generate_batch(batch_size=batch_size, deterministic=True)
+    
+    # Check if they're identical
+    assert torch.all(batch1 == batch2).item()
+
+    batch2 = model.generate_batch(batch_size=batch_size, deterministic=False)
+
+    assert not torch.all(batch1 == batch2).item()
+
