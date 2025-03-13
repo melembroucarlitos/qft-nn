@@ -27,11 +27,11 @@ class AutoEncoder(torch.nn.Module):
     def __init__(self, cfg: AutoEncoderConfig, device: torch.types.Device):
         super().__init__()
         self.cfg = cfg
-        self.W_enc = torch.nn.Parameter(torch.nn.init.xavier_normal_(torch.empty((cfg.n_instances, cfg.n_input_ae, cfg.n_hidden_ae))))
-        self.b_enc = torch.nn.Parameter(torch.zeros(cfg.n_instances, cfg.n_hidden_ae))
+        self.W_enc = torch.nn.Parameter(torch.nn.init.xavier_normal_(torch.empty((cfg.train.n_instances, cfg.n_input_ae, cfg.n_hidden_ae))))
+        self.b_enc = torch.nn.Parameter(torch.zeros(cfg.train.n_instances, cfg.n_hidden_ae))
         if not(cfg.tied_weights):
-            self.W_dec = torch.nn.Parameter(torch.nn.init.xavier_normal_(torch.empty((cfg.n_instances, cfg.n_hidden_ae, cfg.n_input_ae))))
-        self.b_dec = torch.nn.Parameter(torch.zeros(cfg.n_instances, cfg.n_input_ae))
+            self.W_dec = torch.nn.Parameter(torch.nn.init.xavier_normal_(torch.empty((cfg.train.n_instances, cfg.n_hidden_ae, cfg.n_input_ae))))
+        self.b_dec = torch.nn.Parameter(torch.zeros(cfg.train.n_instances, cfg.n_input_ae))
         self.to(device)
 
 
@@ -81,9 +81,9 @@ class AutoEncoder(torch.nn.Module):
         _, l2_loss, _, _, _ = self.forward(h)
 
         # Create an object to store the dead neurons (this will be useful for plotting)
-        dead_neurons_mask = torch.empty((self.cfg.n_instances, self.cfg.n_hidden_ae), dtype=torch.bool, device=self.W_enc.device)
+        dead_neurons_mask = torch.empty((self.cfg.train.n_instances, self.cfg.n_hidden_ae), dtype=torch.bool, device=self.W_enc.device)
 
-        for instance in range(self.cfg.n_instances):
+        for instance in range(self.cfg.train.n_instances):
 
             # Find the dead neurons in this instance. If all neurons are alive, continue
             is_dead = (frac_active_in_window[:, instance].sum(0) < 1e-8)
