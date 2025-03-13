@@ -1,24 +1,14 @@
 # Adapted from ARENA's TMS & SAE Solution notebook, (https://colab.research.google.com/drive/1rPy82rL3iZzy2_Rd3F82RwFhlVnnroIh?usp=sharing, March 11 2025)
 
-from dataclasses import dataclass
 from typing import Callable, Optional
 from jaxtyping import Float
 import torch
 import torch.nn.functional as F
 from tqdm import tqdm
 import einops
-import numpy as np
 
 from qft_nn.nn.base_config import Config
-
-def linear_lr(step, steps):
-    return (1 - (step / steps))
-
-def constant_lr(*_):
-    return 1.0
-
-def cosine_decay_lr(step, steps):
-    return np.cos(0.5 * np.pi * step / (steps - 1))
+from qft_nn.nn.lr_schedules import constant_lr
 
 class AutoEncoderConfig(Config):
     n_instances: int

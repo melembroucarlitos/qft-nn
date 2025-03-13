@@ -2,24 +2,13 @@
 
 from typing import Callable, Optional, Union
 from einops import einops
-import numpy as np
 from jaxtyping import Float
 import torch
 import torch.nn.functional as F
 from tqdm import tqdm
 
 from qft_nn.nn.base_config import Config
-
-
-def linear_lr(step, steps):
-    return (1 - (step / steps))
-
-def constant_lr(*_):
-    return 1.0
-
-def cosine_decay_lr(step, steps):
-    return np.cos(0.5 * np.pi * step / (steps - 1))
-
+from qft_nn.nn.lr_schedules import constant_lr
 
 class SingleLayerToyReLUModelConfig(Config):
     # We optimize n_instances models in a single training loop to let us sweep over
