@@ -1,6 +1,0 @@
-SingleLayerToyReLUModelConfig:
-  n_instances: 8
-  n_features: 5
-  n_hidden: 2
-  n_correlated_pairs: 0
-  n_anticorrelated_pairs: 0
