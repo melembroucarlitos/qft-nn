@@ -39,7 +39,7 @@ def compute_empirical_ntk(
         model.zero_grad()
         y_pred = model(x_i)
         loss = criterion(y_pred, y_i)
-        loss.backward()
+        loss.backward(retain_graph=True) # Hotfix. Prob should pivot towards using torch.autograd.grad as opposed to backward() in the long run
 
         # Extract gradients
         idx = 0
