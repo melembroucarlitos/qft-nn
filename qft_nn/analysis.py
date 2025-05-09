@@ -4,9 +4,10 @@ import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset
 from torchvision import datasets, transforms
 import numpy as np
+from pydantic import BaseModel
 from dataclasses import dataclass
 import time
-from qft_nn.models import MLP, Autoencoder, MLPConfig, AutoencoderConfig, TrainConfig
+from qft_nn.models import MLP, Autoencoder, MLPConfig, AutoencoderConfig, TrainConfig, OPTIMIZER_DICT, CRITERION_DICT, Optimizer, Criterion
 import torch.multiprocessing as mp
 
 # TODO:
@@ -17,23 +18,18 @@ import torch.multiprocessing as mp
 # - Test determinism in combined_dataloader & creation of dataset
 # - Test MLP reconstruction in create_autoencoder_dataset
 
-@dataclass
-class SGLDConfig:
+class SGLDConfig(BaseModel):
     learning_rate: float = 0.001
     batch_size: int = 64
-    criterion: Literal["cross_entropy", "mse"] = "cross_entropy"
-    noise_scale: float = 1
+    criterion: Criterion = "cross_entropy"
+    optimizer: Optimizer = "sgd"
+    temperature: float = 1
     num_steps: int = 10
 
 def _sgld(model: nn.Module, dataloader: DataLoader, device: str, sgld_config: SGLDConfig) -> nn.Module:
     start_time = time.time()
-    optimizer = torch.optim.SGD(model.parameters(), lr=sgld_config.learning_rate)
-    if sgld_config.criterion == "cross_entropy":
-        criterion = nn.CrossEntropyLoss()
-    elif sgld_config.criterion == "mse":
-        criterion = nn.MSELoss()
-    else:
-        raise ValueError(f"Invalid criterion: {sgld_config.criterion}")
+    optimizer = OPTIMIZER_DICT[sgld_config.optimizer](model.parameters(), lr=sgld_config.learning_rate)
+    criterion = CRITERION_DICT[sgld_config.criterion]
     
     for i in range(sgld_config.num_steps):
         for data, target in dataloader:
@@ -45,18 +41,11 @@ def _sgld(model: nn.Module, dataloader: DataLoader, device: str, sgld_config: SG
             loss.backward()
             optimizer.step()
             
-            # Add Gaussian noise
-            total_params = sum(p.numel() for p in model.parameters())
-            noise = torch.randn(total_params, device=device)
-            noise = noise * sgld_config.noise_scale / torch.norm(noise)
-            
-            # Apply noise to parameters
-            start_idx = 0
-            for param in model.parameters():
-                param_size = param.numel()
-                param_noise = noise[start_idx:start_idx + param_size].reshape(param.shape)
-                param.data.add_(param_noise)
-                start_idx += param_size
+            with torch.no_grad():
+                new_params = torch.nn.utils.parameters_to_vector(model.parameters()) 
+                noise = torch.randn_like(new_params) * sgld_config.temperature
+                torch.nn.utils.vector_to_parameters(new_params + noise, model.parameters())
+
     print(f"LocalSGLD sampling took {time.time() - start_time:.2f} seconds")
     return model
 
@@ -230,7 +219,8 @@ if __name__ == "__main__":
         learning_rate=0.001,
         batch_size=64,
         criterion="cross_entropy",
-        noise_scale=0.01,
+        optimizer="sgd",
+        temperature=0.01,
         num_steps=2
     )
 

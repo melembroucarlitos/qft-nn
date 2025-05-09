@@ -41,7 +41,7 @@ CRITERION_DICT = {
     "sectioned_cross_entropy": SectionedCrossEntropy(num_labels=10),
     "mse": nn.MSELoss()
 }
-
+Optimizer = Literal["adam", "sgd"]
 OPTIMIZER_DICT = {
     "adam": torch.optim.Adam,
     "sgd": torch.optim.SGD
@@ -52,7 +52,7 @@ class TrainConfig(BaseModel):
     batch_size: int = 64
     learning_rate: float = 0.001
     eval_every_n_batches: int = 100
-    optimizer: Literal["adam", "sgd"] = "adam"
+    optimizer: Optimizer = "adam"
     criterion: Criterion = "cross_entropy"
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
 
