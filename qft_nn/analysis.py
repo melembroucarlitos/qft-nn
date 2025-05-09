@@ -10,18 +10,28 @@ from dataclasses import dataclass
 import time
 from qft_nn.models import MLP, Autoencoder, MLPConfig, AutoencoderConfig, TrainConfig, OPTIMIZER_DICT, CRITERION_DICT, Optimizer, Criterion
 import torch.multiprocessing as mp
+import os
 
 # TODO:
-# - Model & Batch Parallelize the make_autoencoder_dataset function
-# - Batch Parallelize the SGLD sampling by creating an sgld optimizer (??)
-# - POC on AWS persistence
 
+# MUSTS
 # - Fix _evaluate_bug
-# - Test MLP reconstruction in create_autoencoder_dataset
-# - Start up a dataset creation run on runpod
-# - Run autoencoder sweeps
+# - Save one autoencoder model locally
 
+# SHOULDS
+# - POC on AWS persistence
+# - Start up a dataset creation run on runpod
+
+# COULDS
+# - Batch Parallelize the SGLD sampling by creating an sgld optimizer (??)
+# - Run autoencoder sweeps
+# - Test MLP reconstruction in create_autoencoder_dataset
+
+# WON'TS
 # - Robustify the model parallelizations with proper batching
+
+# Set PyTorch memory management configuration
+os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
 
 class SGLDConfig(BaseModel):
     learning_rate: float = 0.001
@@ -131,7 +141,44 @@ def _create_mlp_to_vectorized_model_function_dataset(mlp: nn.Module, dataloader:
     models = _sgld_parallel(models, dataloader, device, sgld_config)
     print(f"Total SGLD sampling took {time.time() - start_time:.2f} seconds")
     
-    autoencoder_training_data = [(model.flatten(), _create_vectorized_model_function(model, dataloader, device)) for model in models]
+    # Process models in batches on GPU
+    with torch.no_grad():
+        # First get flattened parameters for all models
+        flattened_models = torch.stack([model.flatten() for model in models])
+        
+        # Process full dataset through all models in smaller batches
+        vectorized_outputs = []
+        batch_size = n_models  # Process 8 models at a time to manage memory
+        
+        for model_batch_idx in range(0, len(models), batch_size):
+            # Get current batch of models
+            model_batch = models[model_batch_idx:model_batch_idx + batch_size]
+            batch_outputs = []
+            
+            # Run each batch of models through the full dataset
+            for data, _ in dataloader:
+                data = data.to(device)
+                # Forward pass through batch of models simultaneously
+                outputs = torch.stack([model(data).detach().flatten() for model in model_batch])
+                batch_outputs.append(outputs)
+                
+                # Clear cache after each batch to manage memory
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            
+            # Concatenate all batches for this group of models
+            model_outputs = torch.cat(batch_outputs, dim=1)  # Concatenate along feature dimension
+            vectorized_outputs.append(model_outputs)
+            
+            # Clear cache after processing each model batch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        
+        # Stack outputs from all model batches
+        vectorized_models = torch.cat(vectorized_outputs, dim=0)
+        
+        # Create training data pairs
+        autoencoder_training_data = list(zip(flattened_models, vectorized_models))
 
     train_size = int(train_eval_split * len(autoencoder_training_data))
     eval_size = len(autoencoder_training_data) - train_size
@@ -254,7 +301,7 @@ if __name__ == "__main__":
         decoder_layers=[
             {"dim": 256, "activation": "relu"},
             {"dim": 512, "activation": "relu"},
-            {"dim": 7e5, "activation": "id"} # dataset_size x labels
+            {"dim": 6e5, "activation": "id"} # dataset_size x labels
         ]
     )
     
