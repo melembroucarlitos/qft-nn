@@ -6,6 +6,7 @@ from torch.utils.data import DataLoader, Dataset, Subset
 from torchvision import datasets, transforms
 import numpy as np
 from dataclasses import dataclass
+import pathlib
 from pydantic import BaseModel
 from abc import ABC, abstractmethod
 
@@ -81,12 +82,23 @@ class Model(ABC, nn.Module):
         config: TrainConfig,
         train_loader: DataLoader,
         test_loader: DataLoader,
-        eval_metric: str = "accuracy"
+        eval_metric: str = "accuracy",
+        save_dir: Optional[pathlib.Path] = None
     ) -> List[float]:
+        if save_dir is not None and save_dir.exists():
+            raise FileExistsError(f"Save directory already exists at {save_dir}")
+
         model = self.to(config.device)
 
         optimizer = OPTIMIZER_DICT[config.optimizer](self.parameters(), lr=config.learning_rate)
         criterion = CRITERION_DICT[config.criterion]
+
+        if save_dir is not None:
+            save_dir.mkdir(parents=True, exist_ok=False)
+            # Save train config
+            config_path = save_dir / "train_config.json"
+            with open(config_path, "w") as f:
+                f.write(config.json())
 
         losses = []
         eval_metric_values = []
@@ -109,12 +121,24 @@ class Model(ABC, nn.Module):
                     eval_metric_value = self.evaluate(test_loader, config.device, eval_metric, criterion)
                     eval_metric_values.append(eval_metric_value)
                     print(f'Epoch {epoch+1}/{config.epochs}, Batch {batch_idx}/{len(train_loader)}, Loss: {loss.item():.4f}, Eval {eval_metric}: {eval_metric_value:.4f}')
+                    
+                    if save_dir is not None:
+                        # Save model checkpoint
+                        model_path = save_dir / f"model_epoch{epoch+1}_batch{batch_idx}.pt"
+                        torch.save(self.state_dict(), model_path)
+                    
                     # Switch back to train mode
                     model.train()
             
             avg_loss = epoch_loss / len(train_loader)
             losses.append(avg_loss)
             print(f'Epoch {epoch+1}/{config.epochs}, Loss: {avg_loss:.4f}')
+            
+            if save_dir is not None:
+                # Save model after each epoch
+                model_path = save_dir / f"model_epoch{epoch+1}.pt"
+                torch.save(self.state_dict(), model_path)
+                
         return losses, eval_metric_values
     
     def evaluate(self, test_loader: DataLoader, device: str, metric: str, criterion: Criterion) -> float:
