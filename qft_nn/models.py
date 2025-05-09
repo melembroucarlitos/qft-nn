@@ -185,9 +185,6 @@ class Autoencoder(Model):
         decoded = self.decoder(encoded)
         return decoded
     
-
-    
-
 if __name__ == "__main__":
     # Set up configurations
     mlp_config = MLPConfig(
