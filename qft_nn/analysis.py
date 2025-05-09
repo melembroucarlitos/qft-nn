@@ -1,0 +1,237 @@
+from typing import List, Literal
+import torch
+import torch.nn as nn
+from torch.utils.data import DataLoader, Dataset
+from torchvision import datasets, transforms
+import numpy as np
+from dataclasses import dataclass
+import time
+from qft_nn.models import MLP, Autoencoder, MLPConfig, AutoencoderConfig, TrainConfig
+import torch.multiprocessing as mp
+
+# TODO:
+# - Use Logan's sgld implementation
+# - Parallelize the SGLD sampling
+# - Extract create_autoencoder_dataset into a function
+
+# - Test determinism in combined_dataloader & creation of dataset
+# - Test MLP reconstruction in create_autoencoder_dataset
+
+@dataclass
+class SGLDConfig:
+    learning_rate: float = 0.001
+    batch_size: int = 64
+    criterion: Literal["cross_entropy", "mse"] = "cross_entropy"
+    noise_scale: float = 1
+    num_steps: int = 10
+
+def _sgld(model: nn.Module, dataloader: DataLoader, device: str, sgld_config: SGLDConfig) -> nn.Module:
+    start_time = time.time()
+    optimizer = torch.optim.SGD(model.parameters(), lr=sgld_config.learning_rate)
+    if sgld_config.criterion == "cross_entropy":
+        criterion = nn.CrossEntropyLoss()
+    elif sgld_config.criterion == "mse":
+        criterion = nn.MSELoss()
+    else:
+        raise ValueError(f"Invalid criterion: {sgld_config.criterion}")
+    
+    for i in range(sgld_config.num_steps):
+        for data, target in dataloader:
+            data, target = data.to(device), target.to(device)
+            
+            optimizer.zero_grad()
+            output = model(data)
+            loss = criterion(output, target)
+            loss.backward()
+            optimizer.step()
+            
+            # Add Gaussian noise
+            total_params = sum(p.numel() for p in model.parameters())
+            noise = torch.randn(total_params, device=device)
+            noise = noise * sgld_config.noise_scale / torch.norm(noise)
+            
+            # Apply noise to parameters
+            start_idx = 0
+            for param in model.parameters():
+                param_size = param.numel()
+                param_noise = noise[start_idx:start_idx + param_size].reshape(param.shape)
+                param.data.add_(param_noise)
+                start_idx += param_size
+    print(f"LocalSGLD sampling took {time.time() - start_time:.2f} seconds")
+    return model
+
+class AutoencoderDataset(Dataset):
+    def __init__(self, data: List[tuple]):
+        self.data = data
+    
+    def __len__(self):
+        return len(self.data)
+    
+    def __getitem__(self, idx):
+        return self.data[idx]
+
+def _create_vectorized_model_function(model: nn.Module, dataloader: DataLoader, device: str) -> torch.Tensor:
+    out = []
+    model.eval()  # Set to eval mode
+    with torch.no_grad():  # Disable gradient computation
+        for data, label in dataloader:
+            data, label = data.to(device), label.to(device)
+            logits = model(data)
+            out.append(logits.detach().flatten())  # Detach the tensor
+    return torch.cat(out)
+
+def _evaluate_autoencoder(autoencoder: nn.Module, train_dataloader: DataLoader, eval_dataloader: DataLoader, num_labels: int, device: str) -> float: # TODO: Add a parameter for top logit vs. full 
+    def _evaluate_autoencoder_on_dataloader(autoencoder: nn.Module, dataloader: DataLoader, num_labels: int, device: str) -> dict: # TODO: Create a dataclass for evals
+        out = dict(correct=[], incorrect=[])
+        accuracies = []
+        autoencoder.eval()
+        with torch.no_grad():
+            for idx, (model, ground_truth_vector_model_function) in enumerate(dataloader):
+                local_out = dict(model=model, correct=[], incorrect=[])
+                model = model.to(device)
+                predicted_vector_model_function = autoencoder(model)
+                
+                predicted_vector_model_function = predicted_vector_model_function[0] # hotfix for now
+                ground_truth_vector_model_function = ground_truth_vector_model_function[0] # hotfix for now
+                
+                for i in range(int(ground_truth_vector_model_function.shape[0] / num_labels)): # hotfix for now
+                    ground_truth_label = ground_truth_vector_model_function[i * num_labels:(i + 1) * num_labels].argmax()
+                    predicted_label = predicted_vector_model_function[i * num_labels:(i + 1) * num_labels].argmax()
+
+                    if ground_truth_label == predicted_label:
+                        local_out["correct"].append(predicted_vector_model_function)
+                    else:
+                        local_out["incorrect"].append(predicted_vector_model_function)
+                
+                local_accuracy = len(local_out['correct']) / (len(local_out['incorrect']) + len(local_out['correct']))
+                print(f" Model {idx} reconstructed with {local_accuracy} accuracy")
+                local_out["accuracy"] = local_accuracy
+                accuracies.append(local_accuracy)
+            out["accuracies"] = sum(accuracies) / len(accuracies)
+            return out
+    
+    train_out = _evaluate_autoencoder_on_dataloader(autoencoder, train_dataloader, num_labels, device)
+    print(f"Train accuracy: {train_out['accuracies']}")
+    eval_out = _evaluate_autoencoder_on_dataloader(autoencoder, eval_dataloader, num_labels, device)
+    print(f"Eval accuracy: {eval_out['accuracies']}")
+
+    return train_out, eval_out
+
+
+def main(
+    mlp_config: MLPConfig,
+    autoencoder_config: AutoencoderConfig,
+    mlp_train_config: TrainConfig,
+    autoencoder_train_config: TrainConfig,
+    sgld_config: SGLDConfig,
+    n_models: int,
+    n_devices: int = 1,
+    train_eval_split: float = 0.8,
+    device: str = "cuda" if torch.cuda.is_available() else "cpu"
+):
+    # Load MNIST dataset
+    transform = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize((0.1307,), (0.3081,)) # mean and variance of MNIST
+    ])
+    
+    train_dataset = datasets.MNIST('./data', train=True, download=True, transform=transform)
+    train_dataloader = DataLoader(train_dataset, batch_size=mlp_train_config.batch_size, shuffle=True)
+
+    eval_dataset = datasets.MNIST('./data', train=False, download=True, transform=transform)
+    eval_dataloader = DataLoader(eval_dataset, batch_size=mlp_train_config.batch_size, shuffle=True)
+
+    combined_dataloader = DataLoader( # 7e4 data points
+        torch.utils.data.ConcatDataset([train_dataset, eval_dataset]),
+        batch_size=mlp_train_config.batch_size,
+        shuffle=True
+    )
+    
+    mlp = MLP(mlp_config)
+    mlp.optimize(mlp_train_config, train_dataloader, eval_dataloader)
+    
+    start_time = time.time()
+    models = [_sgld(mlp, train_dataloader, device, sgld_config) for _ in range(n_models)]
+    print(f"SGLD sampling took {time.time() - start_time:.2f} seconds")
+    autoencoder_training_data = [(model.flatten(), _create_vectorized_model_function(model, combined_dataloader, device)) for model in models]
+
+    # Split data into train and eval sets (80% train, 20% eval)
+    train_size = int(train_eval_split * len(autoencoder_training_data))
+    eval_size = len(autoencoder_training_data) - train_size
+    train_data, eval_data = torch.utils.data.random_split(
+        autoencoder_training_data, 
+        [train_size, eval_size]
+    )
+
+    # Create train and eval datasets
+    autoencoder_train_dataset = AutoencoderDataset(train_data)
+    autoencoder_eval_dataset = AutoencoderDataset(eval_data)
+
+    # Create train and eval dataloaders
+    autoencoder_train_dataloader = DataLoader(
+        autoencoder_train_dataset,
+        batch_size=autoencoder_train_config.batch_size,
+        shuffle=True
+    )
+    autoencoder_eval_dataloader = DataLoader(
+        autoencoder_eval_dataset,
+        batch_size=autoencoder_train_config.batch_size,
+        shuffle=False  # No need to shuffle evaluation data
+    )
+
+    autoencoder = Autoencoder(autoencoder_config)
+    autoencoder.optimize(autoencoder_train_config, autoencoder_train_dataloader, test_loader=autoencoder_eval_dataloader, eval_metric="loss")
+
+
+    _evaluate_autoencoder(autoencoder, autoencoder_train_dataloader, autoencoder_eval_dataloader, num_labels=10, device=device)
+
+if __name__ == "__main__":
+    mlp_config = MLPConfig(
+        input_dim=784,
+        hidden_layers=[128, 64],
+        output_dim=10
+    )
+    
+    mlp_train_config = TrainConfig(
+        epochs=1,
+        batch_size=64,
+        learning_rate=0.001,
+        eval_every_n_batches=100,
+        optimizer="adam",
+        criterion="cross_entropy",
+        device="cuda" if torch.cuda.is_available() else "cpu"
+    )
+
+    autoencoder_config = AutoencoderConfig(
+        input_dim=101770,  # total_mlp_params
+        encoder_layers=[
+            {"dim": 512, "activation": "relu"},
+            {"dim": 256, "activation": "relu"},
+            {"dim": 128, "activation": "relu"}
+        ],
+        decoder_layers=[
+            {"dim": 256, "activation": "relu"},
+            {"dim": 512, "activation": "relu"},
+            {"dim": 7e5, "activation": "id"} # dataset_size x labels
+        ]
+    )
+    
+    autoencoder_train_config = TrainConfig(
+        epochs=5,
+        batch_size=10,
+        learning_rate=0.001,
+        eval_every_n_batches=100,
+        optimizer="adam",
+        criterion="mse",
+        device="cuda" if torch.cuda.is_available() else "cpu"
+    )
+
+    sgld_config = SGLDConfig(
+        learning_rate=0.001,
+        batch_size=64,
+        criterion="cross_entropy",
+        noise_scale=0.01,
+        num_steps=2
+    )
+
+    main(mlp_config, autoencoder_config, mlp_train_config, autoencoder_train_config, sgld_config, n_models=10, n_devices=10)
