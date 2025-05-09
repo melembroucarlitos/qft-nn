@@ -15,7 +15,6 @@ import os
 # TODO:
 
 # MUSTS
-# - Fix _evaluate_bug
 # - Save one autoencoder model locally
 
 # SHOULDS
@@ -200,27 +199,38 @@ def _evaluate_autoencoder(autoencoder: nn.Module, train_dataloader: DataLoader, 
         accuracies = []
         autoencoder.eval()
         with torch.no_grad():
-            for idx, (model, ground_truth_vector_model_function) in enumerate(dataloader):
-                local_out = dict(model=model, correct=[], incorrect=[])
-                model = model.to(device)
-                predicted_vector_model_function = autoencoder(model)
+            for batch_idx, (model_batch, ground_truth_batch) in enumerate(dataloader):
+                local_out = dict(model=model_batch, correct=[], incorrect=[])
+                model_batch = model_batch.to(device)
+                predicted_batch = autoencoder(model_batch)
                 
-                predicted_vector_model_function = predicted_vector_model_function[0] # hotfix for now
-                ground_truth_vector_model_function = ground_truth_vector_model_function[0] # hotfix for now
-                
-                for i in range(int(ground_truth_vector_model_function.shape[0] / num_labels)): # hotfix for now
-                    ground_truth_label = ground_truth_vector_model_function[i * num_labels:(i + 1) * num_labels].argmax()
-                    predicted_label = predicted_vector_model_function[i * num_labels:(i + 1) * num_labels].argmax()
+                # Process each model in the batch
+                for model_idx in range(len(model_batch)):
+                    model_predictions = predicted_batch[model_idx]
+                    model_ground_truth = ground_truth_batch[model_idx]
+                    
+                    # Process each sample's predictions
+                    num_samples = model_ground_truth.shape[0] // num_labels
+                    correct_count = 0
+                    
+                    for sample_idx in range(num_samples):
+                        start_idx = sample_idx * num_labels
+                        end_idx = (sample_idx + 1) * num_labels
+                        
+                        ground_truth_label = model_ground_truth[start_idx:end_idx].argmax()
+                        predicted_label = model_predictions[start_idx:end_idx].argmax()
 
-                    if ground_truth_label == predicted_label:
-                        local_out["correct"].append(predicted_vector_model_function)
-                    else:
-                        local_out["incorrect"].append(predicted_vector_model_function)
-                
-                local_accuracy = len(local_out['correct']) / (len(local_out['incorrect']) + len(local_out['correct']))
-                print(f" Model {idx} reconstructed with {local_accuracy} accuracy")
-                local_out["accuracy"] = local_accuracy
-                accuracies.append(local_accuracy)
+                        if ground_truth_label == predicted_label:
+                            local_out["correct"].append(model_predictions)
+                            correct_count += 1
+                        else:
+                            local_out["incorrect"].append(model_predictions)
+                    
+                    local_accuracy = correct_count / num_samples
+                    print(f" Model {batch_idx * len(model_batch) + model_idx} reconstructed with {local_accuracy:.4f} accuracy")
+                    local_out["accuracy"] = local_accuracy
+                    accuracies.append(local_accuracy)
+                    
             out["accuracies"] = sum(accuracies) / len(accuracies)
             return out
     
