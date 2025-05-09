@@ -1,4 +1,5 @@
-from typing import List, Literal
+from typing import List, Literal, Tuple, Optional
+import pathlib
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset
@@ -11,9 +12,7 @@ from qft_nn.models import MLP, Autoencoder, MLPConfig, AutoencoderConfig, TrainC
 import torch.multiprocessing as mp
 
 # TODO:
-# - Use Logan's sgld implementation
 # - Parallelize the SGLD sampling
-# - Extract create_autoencoder_dataset into a function
 
 # - Test determinism in combined_dataloader & creation of dataset
 # - Test MLP reconstruction in create_autoencoder_dataset
@@ -61,13 +60,33 @@ class AutoencoderDataset(Dataset):
 
 def _create_vectorized_model_function(model: nn.Module, dataloader: DataLoader, device: str) -> torch.Tensor:
     out = []
-    model.eval()  # Set to eval mode
-    with torch.no_grad():  # Disable gradient computation
+    model.eval()
+    with torch.no_grad():
         for data, label in dataloader:
             data, label = data.to(device), label.to(device)
             logits = model(data)
             out.append(logits.detach().flatten())  # Detach the tensor
     return torch.cat(out)
+
+def _create_mlp_to_vectorized_model_function_dataset(mlp: nn.Module, dataloader: DataLoader, sgld_config: SGLDConfig, n_models: int, train_eval_split: float, device: str, dir_path: Optional[pathlib.Path] = None) -> Tuple[AutoencoderDataset, AutoencoderDataset, DataLoader, DataLoader]:
+    start_time = time.time()
+    models = [_sgld(mlp, dataloader, device, sgld_config) for _ in range(n_models)]
+    print(f"SGLD sampling took {time.time() - start_time:.2f} seconds")
+    autoencoder_training_data = [(model.flatten(), _create_vectorized_model_function(model, dataloader, device)) for model in models]
+
+    train_size = int(train_eval_split * len(autoencoder_training_data))
+    eval_size = len(autoencoder_training_data) - train_size
+    train_data, eval_data = torch.utils.data.random_split(
+        autoencoder_training_data, 
+        [train_size, eval_size]
+    )
+
+    if dir_path is not None:
+        torch.save(train_data, dir_path / "autoencoder_train_dataset.pt")
+        torch.save(eval_data, dir_path / "autoencoder_eval_dataset.pt")
+
+    return AutoencoderDataset(train_data), AutoencoderDataset(eval_data)
+
 
 def _evaluate_autoencoder(autoencoder: nn.Module, train_dataloader: DataLoader, eval_dataloader: DataLoader, num_labels: int, device: str) -> float: # TODO: Add a parameter for top logit vs. full 
     def _evaluate_autoencoder_on_dataloader(autoencoder: nn.Module, dataloader: DataLoader, num_labels: int, device: str) -> dict: # TODO: Create a dataclass for evals
@@ -129,34 +148,11 @@ def main(
 
     eval_dataset = datasets.MNIST('./data', train=False, download=True, transform=transform)
     eval_dataloader = DataLoader(eval_dataset, batch_size=mlp_train_config.batch_size, shuffle=True)
-
-    combined_dataloader = DataLoader( # 7e4 data points
-        torch.utils.data.ConcatDataset([train_dataset, eval_dataset]),
-        batch_size=mlp_train_config.batch_size,
-        shuffle=True
-    )
     
     mlp = MLP(mlp_config)
     mlp.optimize(mlp_train_config, train_dataloader, eval_dataloader)
     
-    start_time = time.time()
-    models = [_sgld(mlp, train_dataloader, device, sgld_config) for _ in range(n_models)]
-    print(f"SGLD sampling took {time.time() - start_time:.2f} seconds")
-    autoencoder_training_data = [(model.flatten(), _create_vectorized_model_function(model, combined_dataloader, device)) for model in models]
-
-    # Split data into train and eval sets (80% train, 20% eval)
-    train_size = int(train_eval_split * len(autoencoder_training_data))
-    eval_size = len(autoencoder_training_data) - train_size
-    train_data, eval_data = torch.utils.data.random_split(
-        autoencoder_training_data, 
-        [train_size, eval_size]
-    )
-
-    # Create train and eval datasets
-    autoencoder_train_dataset = AutoencoderDataset(train_data)
-    autoencoder_eval_dataset = AutoencoderDataset(eval_data)
-
-    # Create train and eval dataloaders
+    autoencoder_train_dataset, autoencoder_eval_dataset = _create_mlp_to_vectorized_model_function_dataset(mlp, train_dataloader, sgld_config, n_models, train_eval_split, device)
     autoencoder_train_dataloader = DataLoader(
         autoencoder_train_dataset,
         batch_size=autoencoder_train_config.batch_size,
@@ -170,8 +166,6 @@ def main(
 
     autoencoder = Autoencoder(autoencoder_config)
     autoencoder.optimize(autoencoder_train_config, autoencoder_train_dataloader, test_loader=autoencoder_eval_dataloader, eval_metric="loss")
-
-
     _evaluate_autoencoder(autoencoder, autoencoder_train_dataloader, autoencoder_eval_dataloader, num_labels=10, device=device)
 
 if __name__ == "__main__":
