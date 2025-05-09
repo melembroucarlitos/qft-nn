@@ -12,10 +12,16 @@ from qft_nn.models import MLP, Autoencoder, MLPConfig, AutoencoderConfig, TrainC
 import torch.multiprocessing as mp
 
 # TODO:
-# - Parallelize the SGLD sampling
+# - Model & Batch Parallelize the make_autoencoder_dataset function
+# - Batch Parallelize the SGLD sampling by creating an sgld optimizer (??)
+# - POC on AWS persistence
 
-# - Test determinism in combined_dataloader & creation of dataset
+# - Fix _evaluate_bug
 # - Test MLP reconstruction in create_autoencoder_dataset
+# - Start up a dataset creation run on runpod
+# - Run autoencoder sweeps
+
+# - Robustify the model parallelizations with proper batching
 
 class SGLDConfig(BaseModel):
     learning_rate: float = 0.001
@@ -48,6 +54,51 @@ def _sgld(model: nn.Module, dataloader: DataLoader, device: str, sgld_config: SG
     print(f"LocalSGLD sampling took {time.time() - start_time:.2f} seconds")
     return model
 
+def _sgld_parallel(models: List[nn.Module], dataloader: DataLoader, device: str, sgld_config: SGLDConfig) -> List[nn.Module]:
+    start_time = time.time()
+    optimizers = [OPTIMIZER_DICT[sgld_config.optimizer](model.parameters(), lr=sgld_config.learning_rate) for model in models]
+    criterion = CRITERION_DICT[sgld_config.criterion]
+    
+    # Create separate dataloaders for each model to ensure different data points
+    dataloaders = [
+        DataLoader(
+            dataloader.dataset,
+            batch_size=sgld_config.batch_size,
+            shuffle=True,  # Ensure different ordering for each model
+            num_workers=0  # Avoid potential issues with multiple workers
+        ) for _ in range(len(models))
+    ]
+    
+    for i in range(sgld_config.num_steps):
+        # Get different batches for each model
+        data_target_pairs = [next(iter(dl)) for dl in dataloaders]
+        
+        # Process all models in parallel with their unique data
+        for optimizer in optimizers:
+            optimizer.zero_grad()
+        
+        # Forward pass for all models with their unique data
+        outputs = [model(data.to(device)) for model, (data, _) in zip(models, data_target_pairs)]
+        losses = [criterion(output, target.to(device)) for output, (_, target) in zip(outputs, data_target_pairs)]
+        
+        # Backward pass for all models
+        for loss in losses:
+            loss.backward()
+        
+        # Update all models
+        for optimizer in optimizers:
+            optimizer.step()
+        
+        # Add noise to all models
+        with torch.no_grad():
+            for model in models:
+                new_params = torch.nn.utils.parameters_to_vector(model.parameters())
+                noise = torch.randn_like(new_params) * sgld_config.temperature
+                torch.nn.utils.vector_to_parameters(new_params + noise, model.parameters())
+
+    print(f"Parallel SGLD sampling took {time.time() - start_time:.2f} seconds")
+    return models
+
 class AutoencoderDataset(Dataset):
     def __init__(self, data: List[tuple]):
         self.data = data
@@ -70,8 +121,16 @@ def _create_vectorized_model_function(model: nn.Module, dataloader: DataLoader, 
 
 def _create_mlp_to_vectorized_model_function_dataset(mlp: nn.Module, dataloader: DataLoader, sgld_config: SGLDConfig, n_models: int, train_eval_split: float, device: str, dir_path: Optional[pathlib.Path] = None) -> Tuple[AutoencoderDataset, AutoencoderDataset, DataLoader, DataLoader]:
     start_time = time.time()
-    models = [_sgld(mlp, dataloader, device, sgld_config) for _ in range(n_models)]
-    print(f"SGLD sampling took {time.time() - start_time:.2f} seconds")
+    # Create n_models copies of the MLP
+    models = [MLP(mlp.config).to(device) for _ in range(n_models)]
+    # Copy weights from the original MLP to all copies
+    for model in models:
+        model.load_state_dict(mlp.state_dict())
+    
+    # Run parallel SGLD
+    models = _sgld_parallel(models, dataloader, device, sgld_config)
+    print(f"Total SGLD sampling took {time.time() - start_time:.2f} seconds")
+    
     autoencoder_training_data = [(model.flatten(), _create_vectorized_model_function(model, dataloader, device)) for model in models]
 
     train_size = int(train_eval_split * len(autoencoder_training_data))
@@ -135,7 +194,7 @@ def main(
     n_models: int,
     n_devices: int = 1,
     train_eval_split: float = 0.8,
-    device: str = "cuda" if torch.cuda.is_available() else "cpu"
+    device: str = "cuda" if torch.cuda.is_available() else "cpu" # TODO: too many device parameters being passed around
 ):
     # Load MNIST dataset
     transform = transforms.Compose([
@@ -218,4 +277,4 @@ if __name__ == "__main__":
         num_steps=2
     )
 
-    main(mlp_config, autoencoder_config, mlp_train_config, autoencoder_train_config, sgld_config, n_models=10, n_devices=10)
+    main(mlp_config, autoencoder_config, mlp_train_config, autoencoder_train_config, sgld_config, n_models=100, n_devices=10)
