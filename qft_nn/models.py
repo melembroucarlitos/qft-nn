@@ -56,7 +56,7 @@ class TrainConfig(BaseModel):
     optimizer: Optimizer = "adam"
     criterion: Criterion = "cross_entropy"
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
-
+    save_dir: Optional[pathlib.Path] = None
 class MLPConfig(BaseModel):
     input_dim: int = 784
     hidden_layers: List[int] = [64, 32]

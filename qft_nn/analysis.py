@@ -283,7 +283,7 @@ def main(
     )
 
     autoencoder = Autoencoder(autoencoder_config)
-    autoencoder.optimize(autoencoder_train_config, autoencoder_train_dataloader, test_loader=autoencoder_eval_dataloader, eval_metric="loss", save_dir=pathlib.Path("/home/lucas/qft-nn/trained_autoencoders"))
+    autoencoder.optimize(autoencoder_train_config, autoencoder_train_dataloader, test_loader=autoencoder_eval_dataloader, eval_metric="loss", save_dir=autoencoder_train_config.save_dir)
     _evaluate_autoencoder(autoencoder, autoencoder_train_dataloader, autoencoder_eval_dataloader, num_labels=10, device=device)
 
 if __name__ == "__main__":
@@ -307,12 +307,9 @@ if __name__ == "__main__":
         input_dim=101770,  # total_mlp_params
         encoder_layers=[
             {"dim": 512, "activation": "relu"},
-            {"dim": 256, "activation": "relu"},
-            {"dim": 128, "activation": "relu"}
+            {"dim": 52, "activation": "relu"},
         ],
         decoder_layers=[
-            {"dim": 256, "activation": "relu"},
-            {"dim": 512, "activation": "relu"},
             {"dim": 6e5, "activation": "id"} # dataset_size x labels
         ]
     )
@@ -333,7 +330,7 @@ if __name__ == "__main__":
         criterion="cross_entropy",
         optimizer="sgd",
         temperature=0.01,
-        num_steps=2
+        num_steps=1000
     )
 
     main(mlp_config, autoencoder_config, mlp_train_config, autoencoder_train_config, sgld_config, n_models=100, n_devices=10)
