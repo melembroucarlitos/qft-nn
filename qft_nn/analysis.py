@@ -8,23 +8,25 @@ import numpy as np
 from pydantic import BaseModel
 from dataclasses import dataclass
 import time
-from qft_nn.models import MLP, Autoencoder, MLPConfig, AutoencoderConfig, TrainConfig, OPTIMIZER_DICT, CRITERION_DICT, Optimizer, Criterion
-import torch.multiprocessing as mp
 import os
+
+from qft_nn.models import MLP, Autoencoder, MLPConfig, AutoencoderConfig, TrainConfig, OPTIMIZER_DICT, CRITERION_DICT, Optimizer, Criterion
 
 # TODO:
 
 # MUSTS
-# - Save one autoencoder model locally
 
 # SHOULDS
 # - POC on AWS persistence
 # - Start up a dataset creation run on runpod
+# - Thorough testting
 
 # COULDS
 # - Batch Parallelize the SGLD sampling by creating an sgld optimizer (??)
 # - Run autoencoder sweeps
 # - Test MLP reconstruction in create_autoencoder_dataset
+# - Add dataset path to 
+# - Make dataset genearting function interruptible
 
 # WON'TS
 # - Robustify the model parallelizations with proper batching
@@ -57,7 +59,7 @@ def _sgld(model: nn.Module, dataloader: DataLoader, device: str, sgld_config: SG
             
             with torch.no_grad():
                 new_params = torch.nn.utils.parameters_to_vector(model.parameters()) 
-                noise = torch.randn_like(new_params) * sgld_config.temperature
+                noise = torch.randn_like(new_params) * np.sqrt(sgld_config.learning_rate * sgld_config.temperature)
                 torch.nn.utils.vector_to_parameters(new_params + noise, model.parameters())
 
     print(f"LocalSGLD sampling took {time.time() - start_time:.2f} seconds")
@@ -281,7 +283,7 @@ def main(
     )
 
     autoencoder = Autoencoder(autoencoder_config)
-    autoencoder.optimize(autoencoder_train_config, autoencoder_train_dataloader, test_loader=autoencoder_eval_dataloader, eval_metric="loss")
+    autoencoder.optimize(autoencoder_train_config, autoencoder_train_dataloader, test_loader=autoencoder_eval_dataloader, eval_metric="loss", save_dir=pathlib.Path("/home/lucas/qft-nn/trained_autoencoders"))
     _evaluate_autoencoder(autoencoder, autoencoder_train_dataloader, autoencoder_eval_dataloader, num_labels=10, device=device)
 
 if __name__ == "__main__":
