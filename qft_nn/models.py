@@ -65,6 +65,7 @@ class MLPConfig(BaseModel):
     output_dim: int = 10
 
 class EmbeddingBias(nn.Module):
+    """CP from Logan's Implementation"""
     def __init__(self, embedding):
         super().__init__()
         num_tokens = embedding.weight.size(0)
