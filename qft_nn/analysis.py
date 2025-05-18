@@ -92,7 +92,7 @@ def _sgld_parallel(models: List[nn.Module], dataloader: DataLoader, device: str,
     print(f"Parallel SGLD sampling took {time.time() - start_time:.2f} seconds")
     return models
 
-class AutoencoderDataset(Dataset):
+class DictionaryDataset(Dataset):
     def __init__(self, data: List[tuple]):
         self.data = data
     
@@ -174,11 +174,11 @@ def _create_mlp_to_vectorized_model_function_dataset(mlp: nn.Module, dataloader:
         torch.save(train_data, dir_path / "autoencoder_train_dataset.pt")
         torch.save(eval_data, dir_path / "autoencoder_eval_dataset.pt")
 
-    return AutoencoderDataset(train_data), AutoencoderDataset(eval_data)
+    return DictionaryDataset(train_data), DictionaryDataset(eval_data)
 
 
-def _evaluate_autoencoder(autoencoder: nn.Module, train_dataloader: DataLoader, eval_dataloader: DataLoader, num_labels: int, device: str) -> float: # TODO: Add a parameter for top logit vs. full 
-    def _evaluate_autoencoder_on_dataloader(autoencoder: nn.Module, dataloader: DataLoader, num_labels: int, device: str) -> dict: # TODO: Create a dataclass for evals
+def _evaluate_dictionary(autoencoder: nn.Module, train_dataloader: DataLoader, eval_dataloader: DataLoader, num_labels: int, device: str) -> float: # TODO: Add a parameter for top logit vs. full 
+    def _evaluate_dictionary_on_dataloader(autoencoder: nn.Module, dataloader: DataLoader, num_labels: int, device: str) -> dict: # TODO: Create a dataclass for evals
         out = dict(correct=[], incorrect=[])
         accuracies = []
         autoencoder.eval()
@@ -218,9 +218,9 @@ def _evaluate_autoencoder(autoencoder: nn.Module, train_dataloader: DataLoader, 
             out["accuracies"] = sum(accuracies) / len(accuracies)
             return out
     
-    train_out = _evaluate_autoencoder_on_dataloader(autoencoder, train_dataloader, num_labels, device)
+    train_out = _evaluate_dictionary_on_dataloader(autoencoder, train_dataloader, num_labels, device)
     print(f"Train accuracy: {train_out['accuracies']}")
-    eval_out = _evaluate_autoencoder_on_dataloader(autoencoder, eval_dataloader, num_labels, device)
+    eval_out = _evaluate_dictionary_on_dataloader(autoencoder, eval_dataloader, num_labels, device)
     print(f"Eval accuracy: {eval_out['accuracies']}")
 
     return train_out, eval_out
@@ -253,22 +253,21 @@ def main(
     mlp = MLP(mlp_config)
     mlp.optimize(mlp_train_config, train_dataloader, eval_dataloader)
     
-    autoencoder_train_dataset, autoencoder_eval_dataset = _create_mlp_to_vectorized_model_function_dataset(mlp, train_dataloader, sgld_config, n_models, train_eval_split, device)
-    autoencoder_train_dataloader = DataLoader(
-        autoencoder_train_dataset,
-        batch_size=autoencoder_train_config.batch_size,
+    dictionary_train_dataset, dictionary_eval_dataset = _create_mlp_to_vectorized_model_function_dataset(mlp, train_dataloader, sgld_config, n_models, train_eval_split, device)
+    dictionary_train_dataloader = DataLoader(
+        dictionary_train_dataset,
+        batch_size=topk_dictionary_train_config.batch_size,
         shuffle=True
     )
-    autoencoder_eval_dataloader = DataLoader(
-        autoencoder_eval_dataset,
-        batch_size=autoencoder_train_config.batch_size,
+    dictionary_eval_dataloader = DataLoader(
+        dictionary_eval_dataset,
+        batch_size=topk_dictionary_train_config.batch_size,
         shuffle=False  # No need to shuffle evaluation data
     )
 
-    autoencoder = AutoEncoderTopK(autoencoder_config)
-    # Note: AutoEncoderTopK doesn't have an optimize method, so we'll need to implement training
-    # This is a placeholder for now
-    _evaluate_autoencoder(autoencoder, autoencoder_train_dataloader, autoencoder_eval_dataloader, num_labels=10, device=device)
+    topk_dictionary = TopKDictionary(topk_dictionary_config)
+    topk_dictionary.optimize(topk_dictionary_train_config, dictionary_train_dataloader, dictionary_eval_dataloader)
+    _evaluate_dictionary(topk_dictionary, dictionary_train_dataloader, dictionary_eval_dataloader, num_labels=10, device=device)
 
 if __name__ == "__main__":
     mlp_config = MLPConfig(
@@ -287,16 +286,19 @@ if __name__ == "__main__":
         device="cuda" if torch.cuda.is_available() else "cpu"
     )
 
-    autoencoder_config = AutoencoderConfig(
-        activation_dim=101770,  # total_mlp_params
-        dict_size=512,         # number of features in dictionary
-        k=10,                  # keep top 10 activations
-        data_mean=None,
-        tokens_to_combine=None,
-        embedding=None
+    topk_dictionary_config = TopKDictionaryConfig(
+        input_dim=784,
+        latent_dim=128,
+        output_dim=784,
+        k=10,
+        activation="relu",
+        encoder_bias=True,
+        decoder_bias=True,
+        input_center=None,
+        output_center=None
     )
     
-    autoencoder_train_config = TrainConfig(
+    topk_dictionary_train_config = TrainConfig(
         epochs=5,
         batch_size=10,
         learning_rate=0.001,
@@ -315,4 +317,4 @@ if __name__ == "__main__":
         num_steps=1000
     )
 
-    main(mlp_config, autoencoder_config, mlp_train_config, autoencoder_train_config, sgld_config, n_models=100, n_devices=10)
+    main(mlp_config, topk_dictionary_config, mlp_train_config, topk_dictionary_train_config, sgld_config, n_models=100, n_devices=10)
