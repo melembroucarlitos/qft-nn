@@ -12,7 +12,6 @@ import os
 
 from qft_nn.models import MLP, TopKDictionary, TopKDictionaryConfig, MLPConfig, TrainConfig, OPTIMIZER_DICT, CRITERION_DICT, Optimizer, Criterion
 
-# TODO:
 
 os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
 
@@ -112,7 +111,7 @@ def _create_vectorized_model_function(model: nn.Module, dataloader: DataLoader, 
             out.append(logits.detach().flatten())  # Detach the tensor
     return torch.cat(out)
 
-def _create_mlp_to_vectorized_model_function_dataset(mlp: nn.Module, dataloader: DataLoader, sgld_config: SGLDConfig, n_models: int, train_eval_split: float, device: str, dir_path: Optional[pathlib.Path] = None) -> Tuple[AutoencoderDataset, AutoencoderDataset, DataLoader, DataLoader]:
+def _create_mlp_to_vectorized_model_function_dataset(mlp: nn.Module, dataloader: DataLoader, sgld_config: SGLDConfig, n_models: int, train_eval_split: float, device: str, dir_path: Optional[pathlib.Path] = None) -> Tuple[DictionaryDataset, DictionaryDataset, DataLoader, DataLoader]:
     start_time = time.time()
     # Create n_models copies of the MLP
     models = [MLP(mlp.config).to(device) for _ in range(n_models)]
@@ -287,9 +286,9 @@ if __name__ == "__main__":
     )
 
     topk_dictionary_config = TopKDictionaryConfig(
-        input_dim=784,
+        input_dim=101770,
         latent_dim=128,
-        output_dim=784,
+        output_dim=600000,
         k=10,
         activation="relu",
         encoder_bias=True,
@@ -314,7 +313,7 @@ if __name__ == "__main__":
         criterion="cross_entropy",
         optimizer="sgd",
         temperature=0.01,
-        num_steps=1000
+        num_steps=2
     )
 
-    main(mlp_config, topk_dictionary_config, mlp_train_config, topk_dictionary_train_config, sgld_config, n_models=100, n_devices=10)
+    main(mlp_config, topk_dictionary_config, mlp_train_config, topk_dictionary_train_config, sgld_config, n_models=10, n_devices=10)

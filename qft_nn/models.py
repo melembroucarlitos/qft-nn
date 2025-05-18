@@ -291,7 +291,35 @@ class TopKDictionary(Model):
             self.decoder.weight.data,
             "d_sae, d_in d_sae -> d_in d_sae",
         )
-    
+
+    def evaluate(self, test_loader: DataLoader, device: str, metric: str, criterion: Criterion) -> float:
+        model = self.to(device)
+        model.eval()
+        total_loss = 0
+        total_fvu = 0
+        num_batches = 0
+
+        def calculate_fvu(x_orig, x_pred):
+            """Calculate Fraction of Variance Unexplained"""
+            mean = x_orig.mean(dim=0, keepdim=True)
+            numerator = torch.mean(torch.sum((x_orig - x_pred)**2, dim=-1))
+            denominator = torch.mean(torch.sum((x_orig - mean)**2, dim=-1))
+            return numerator / (denominator + 1e-6)
+
+        with torch.no_grad():
+            for batch_idx, (data, target) in enumerate(test_loader):
+                data, target = data.to(device), target.to(device)
+                output = model(data)
+                loss = F.mse_loss(output, target)
+                fvu = calculate_fvu(target, output)
+                total_loss += loss.item()
+                total_fvu += fvu.item()
+                num_batches += 1
+
+        print(f"Average MSE Loss: {total_loss/num_batches:.6f}")
+        print(f"Average FVU: {total_fvu/num_batches:.6f}")
+        return total_loss / num_batches
+
 if __name__ == "__main__":
     def test_train_model(train_config: TrainConfig, model_config: BaseModel, model_type: Literal["mlp", "autoencoder"]):
         # Load MNIST dataset
