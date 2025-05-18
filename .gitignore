@@ -2,4 +2,5 @@
 .mypy_cache
 .pytest_cache
 qft_nn.egg-info
+data/
 **/__pycache__
