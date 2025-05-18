@@ -10,28 +10,10 @@ from dataclasses import dataclass
 import time
 import os
 
-from qft_nn.models import MLP, Autoencoder, MLPConfig, AutoencoderConfig, TrainConfig, OPTIMIZER_DICT, CRITERION_DICT, Optimizer, Criterion
+from qft_nn.models import MLP, TopKDictionary, TopKDictionaryConfig, MLPConfig, TrainConfig, OPTIMIZER_DICT, CRITERION_DICT, Optimizer, Criterion
 
 # TODO:
 
-# MUSTS
-
-# SHOULDS
-# - POC on AWS persistence
-# - Start up a dataset creation run on runpod
-# - Thorough testting
-
-# COULDS
-# - Batch Parallelize the SGLD sampling by creating an sgld optimizer (??)
-# - Run autoencoder sweeps
-# - Test MLP reconstruction in create_autoencoder_dataset
-# - Add dataset path to 
-# - Make dataset genearting function interruptible
-
-# WON'TS
-# - Robustify the model parallelizations with proper batching
-
-# Set PyTorch memory management configuration
 os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
 
 class SGLDConfig(BaseModel):
@@ -246,9 +228,9 @@ def _evaluate_autoencoder(autoencoder: nn.Module, train_dataloader: DataLoader, 
 
 def main(
     mlp_config: MLPConfig,
-    autoencoder_config: AutoencoderConfig,
+    topk_dictionary_config: TopKDictionaryConfig,
     mlp_train_config: TrainConfig,
-    autoencoder_train_config: TrainConfig,
+    topk_dictionary_train_config: TrainConfig,
     sgld_config: SGLDConfig,
     n_models: int,
     n_devices: int = 1,
@@ -258,7 +240,8 @@ def main(
     # Load MNIST dataset
     transform = transforms.Compose([
         transforms.ToTensor(),
-        transforms.Normalize((0.1307,), (0.3081,)) # mean and variance of MNIST
+        transforms.Normalize((0.1307,), (0.3081,)),  # MNIST mean and std
+        transforms.Lambda(lambda x: x.flatten())  # Flatten the image
     ])
     
     train_dataset = datasets.MNIST('./data', train=True, download=True, transform=transform)
@@ -282,8 +265,9 @@ def main(
         shuffle=False  # No need to shuffle evaluation data
     )
 
-    autoencoder = Autoencoder(autoencoder_config)
-    autoencoder.optimize(autoencoder_train_config, autoencoder_train_dataloader, test_loader=autoencoder_eval_dataloader, eval_metric="loss", save_dir=autoencoder_train_config.save_dir)
+    autoencoder = AutoEncoderTopK(autoencoder_config)
+    # Note: AutoEncoderTopK doesn't have an optimize method, so we'll need to implement training
+    # This is a placeholder for now
     _evaluate_autoencoder(autoencoder, autoencoder_train_dataloader, autoencoder_eval_dataloader, num_labels=10, device=device)
 
 if __name__ == "__main__":
@@ -304,14 +288,12 @@ if __name__ == "__main__":
     )
 
     autoencoder_config = AutoencoderConfig(
-        input_dim=101770,  # total_mlp_params
-        encoder_layers=[
-            {"dim": 512, "activation": "relu"},
-            {"dim": 52, "activation": "relu"},
-        ],
-        decoder_layers=[
-            {"dim": 6e5, "activation": "id"} # dataset_size x labels
-        ]
+        activation_dim=101770,  # total_mlp_params
+        dict_size=512,         # number of features in dictionary
+        k=10,                  # keep top 10 activations
+        data_mean=None,
+        tokens_to_combine=None,
+        embedding=None
     )
     
     autoencoder_train_config = TrainConfig(

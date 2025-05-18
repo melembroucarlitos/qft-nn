@@ -180,7 +180,6 @@ class MLP(Model):
         self.fc2 = nn.Linear(config.hidden_layers[0], config.output_dim)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = x.view(x.size(0), -1)  # Flattens the input TODO: Move this into the mnist dataset/dataloader creation
         x = torch.relu(self.fc1(x))
         x = self.fc2(x)
         return x
@@ -350,10 +349,10 @@ if __name__ == "__main__":
     )
 
     # # Train MLP
-    # print("Training MLP...")
-    # mlp_losses, mlp_accuracies = test_train_model(train_config, mlp_config, "mlp")
+    print("Training MLP...")
+    mlp_losses, mlp_accuracies = test_train_model(train_config, mlp_config, "mlp")
 
     # Train AutoEncoder
-    print("\nTraining AutoEncoder...")
-    ae_losses, ae_accuracies = test_train_model(train_config, topk_dictionary_config, "autoencoder")
+    # print("\nTraining AutoEncoder...")
+    # ae_losses, ae_accuracies = test_train_model(train_config, topk_dictionary_config, "autoencoder")
 
