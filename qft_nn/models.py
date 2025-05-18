@@ -9,6 +9,7 @@ from dataclasses import dataclass
 import pathlib
 from pydantic import BaseModel
 from abc import ABC, abstractmethod
+import einops
 
 class SectionedCrossEntropy(nn.Module):
     def __init__(self, num_labels: int):
@@ -57,16 +58,31 @@ class TrainConfig(BaseModel):
     criterion: Criterion = "cross_entropy"
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
     save_dir: Optional[pathlib.Path] = None
+
 class MLPConfig(BaseModel):
     input_dim: int = 784
     hidden_layers: List[int] = [64, 32]
     output_dim: int = 10
 
 class AutoencoderConfig(BaseModel):
-    input_dim: int = 784
-    encoder_layers: List[Dict[str, int | Literal["relu", "id"]]] = [{"dim": 64, "activation": "relu"}, {"dim": 32, "activation": "relu"}]
-    decoder_layers: List[Dict[str, int | Literal["relu", "id"]]] = [{"dim": 64, "activation": "relu"}, {"dim": 784, "activation": "id"}]
+    activation_dim: int
+    dict_size: int
+    k: int
+    data_mean: Optional[torch.Tensor] = None
+    tokens_to_combine: Optional[torch.Tensor] = None
+    embedding: Optional[nn.Module] = None
 
+class EmbeddingBias(nn.Module):
+    def __init__(self, embedding):
+        super().__init__()
+        num_tokens = embedding.weight.size(0)
+        d_model = embedding.weight.size(1)
+        self.bias = nn.Parameter(torch.zeros(num_tokens, d_model))
+        self.bias.data.copy_(embedding.weight)
+        self.bias.requires_grad = True
+
+    def forward(self, x):
+        return self.bias[x]
 
 class Model(ABC, nn.Module):   
     def __init__(self, config: BaseModel):
@@ -177,37 +193,112 @@ class MLP(Model):
         return x
 
 
-class Autoencoder(Model):
-    def __init__(
-        self,
-        config: AutoencoderConfig
-    ):
-        super().__init__(config)
+class AutoEncoderTopK(nn.Module):
+    """
+    (Adapted from Logan's Implementation, notes below are cp)
+    The top-k autoencoder architecture and initialization used in https://arxiv.org/abs/2406.04093
+    NOTE: (From Adam Karvonen) There is an unmaintained implementation using Triton kernels in the topk-triton-implementation branch.
+    We abandoned it as we didn't notice a significant speedup and it added complications, which are noted
+    in the AutoEncoderTopK class docstring in that branch.
+
+    With some additional effort, you can traisn a Top-K SAE with the Triton kernels and modify the state dict for compatibility with this class.
+    Notably, the Triton kernels currently have the decoder to be stored in nn.Parameter, not nn.Linear, and the decoder weights must also
+    be stored in the same shape as the encoder.
+    """
+
+    def __init__(self, config: AutoencoderConfig):
+        super().__init__()
+        self.activation_dim = config.activation_dim
+        self.dict_size = config.dict_size
+        self.k = config.k
+        self.tokens_to_combine = config.tokens_to_combine
+
+        self.encoder = nn.Linear(config.activation_dim, config.dict_size)
+        self.encoder.bias.data.zero_()
+
+        self.decoder = nn.Linear(config.dict_size, config.activation_dim, bias=False)
+        self.decoder.weight.data = self.encoder.weight.data.clone().T
+        self.set_decoder_norm_to_unit_norm()
+
+        self.b_dec = nn.Parameter(torch.zeros(config.activation_dim))
+        self.per_token_bias = config.embedding
+
+    def encode(self, x: torch.Tensor, return_topk: bool = False):
+        post_relu_feat_acts_BF = nn.functional.relu(self.encoder(x - self.b_dec))
+        post_topk = post_relu_feat_acts_BF.topk(self.k, sorted=False, dim=-1)
+
+        # We can't split immediately due to nnsight
+        tops_acts_BK = post_topk.values
+        top_indices_BK = post_topk.indices
+
+        buffer_BF = torch.zeros_like(post_relu_feat_acts_BF)
+        encoded_acts_BF = buffer_BF.scatter_(dim=-1, index=top_indices_BK, src=tops_acts_BK)
+
+        if return_topk:
+            return encoded_acts_BF, tops_acts_BK, top_indices_BK
+        else:
+            return encoded_acts_BF
+
+    def decode(self, x: torch.Tensor) -> torch.Tensor:
+        return self.decoder(x) + self.b_dec
+
+    def forward(self, x: torch.Tensor, output_features: bool = False):
+        encoded_acts_BF = self.encode(x)
+        x_hat_BD = self.decode(encoded_acts_BF)
+        if not output_features:
+            return x_hat_BD
+        else:
+            return x_hat_BD, encoded_acts_BF
+
+    @torch.no_grad()
+    def set_decoder_norm_to_unit_norm(self):
+        eps = torch.finfo(self.decoder.weight.dtype).eps
+        norm = torch.norm(self.decoder.weight.data, dim=0, keepdim=True)
+        self.decoder.weight.data /= norm + eps
+
+    @torch.no_grad()
+    def remove_gradient_parallel_to_decoder_directions(self):
+        assert self.decoder.weight.grad is not None  # keep pyright happy
+
+        parallel_component = einops.einsum(
+            self.decoder.weight.grad,
+            self.decoder.weight.data,
+            "d_in d_sae, d_in d_sae -> d_sae",
+        )
+        self.decoder.weight.grad -= einops.einsum(
+            parallel_component,
+            self.decoder.weight.data,
+            "d_sae, d_in d_sae -> d_in d_sae",
+        )
+
+    @classmethod
+    def from_pretrained(cls, path: str, k: int, device: Optional[str] = None, embedding: Optional[nn.Module] = None):
+        """
+        Load a pretrained autoencoder from a file.
+        """
+        state_dict = torch.load(path, weights_only=True, map_location='cpu')
+        dict_size, activation_dim = state_dict["encoder.weight"].shape
         
-        # Build encoder
-        encoder_modules = []
-        prev_dim = config.input_dim
-        for layer in config.encoder_layers:
-            encoder_modules.append(nn.Linear(prev_dim, layer["dim"]))
-            if layer["activation"] == "relu":
-                encoder_modules.append(nn.ReLU())
-            prev_dim = layer["dim"]
+        if 'per_token_bias.bias' in state_dict:
+            num_tokens, d_model = state_dict["per_token_bias.bias"].shape
+            embedding = EmbeddingBias(nn.Embedding(num_tokens, d_model))
+        else: 
+            embedding = None
+            
+        config = AutoencoderConfig(
+            activation_dim=activation_dim,
+            dict_size=dict_size,
+            k=k,
+            embedding=embedding
+        )
         
-        # Build decoder
-        decoder_modules = []
-        for layer in config.decoder_layers:
-            decoder_modules.append(nn.Linear(prev_dim, layer["dim"]))
-            if layer["activation"] == "relu":
-                decoder_modules.append(nn.ReLU())
-            prev_dim = layer["dim"]
+        autoencoder = cls(config)
+        autoencoder.load_state_dict(state_dict)
         
-        self.encoder = nn.Sequential(*encoder_modules)
-        self.decoder = nn.Sequential(*decoder_modules)
-    
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        encoded = self.encoder(x)
-        decoded = self.decoder(encoded)
-        return decoded
+        if device is not None:
+            autoencoder.to(device)
+            
+        return autoencoder
     
 if __name__ == "__main__":
     # Set up configurations
