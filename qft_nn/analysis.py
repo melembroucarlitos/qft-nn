@@ -7,30 +7,66 @@ from torchvision import datasets, transforms
 import numpy as np
 from pydantic import BaseModel
 from dataclasses import dataclass
-import time
-import os
+from jaxtyping import Float
+import matplotlib.pyplot as plt
 
 from qft_nn.models import MLP, TopKDictionary, TopKDictionaryConfig, MLPConfig, TrainConfig, OPTIMIZER_DICT, CRITERION_DICT, Optimizer, Criterion
 from qft_nn.sgld import _sgld_parallel, SGLDConfig
-from qft_nn.dataset import _create_vectorized_model_function, _create_mlp_to_vectorized_model_function_dataset, DictionaryDataset
+from qft_nn.dataset import _create_vectorized_model_function, _create_mlp_to_vectorized_model_function_dataset, DictionaryDataset, _create_mnist_dataloaders
 
 DatasetMetrics = Literal["weight", "function", "label_projected", "loss"]
-def _analyze_dataset(seed_model: nn.Module, dataset: Dataset, device: str, metrics: List[DatasetMetrics]) -> Dict[DatasetMetrics, List[float]]:
-    raise NotImplementedError("This function is not implemented")
-    out = dict()
-    for x, y in dataset:
-        x, y = x.to(device), y.to(device)
-        if "weight" in metrics:
-            out["weight"].append(abs(x - seed_model.weight.detach().cpu().numpy()))
-        if "function" in metrics:
-            dataloader = DataLoader(dataset, batch_size=1, shuffle=False)
-            out["function"].append(abs(y - _create_vectorized_model_function(seed_model, dataset, device)))
-        if "label_projected" in metrics:
-            out["label_projected"].append(seed_model(x).argmax(dim=-1).detach().cpu().numpy())
-        if "loss" in metrics:
-            out["loss"].append(seed_model(x).detach().cpu().numpy())
+DISTANCE_FUNCTION_DICT = {
+    "l2": lambda x, y: torch.norm(x - y, p=2),
+    "l1": lambda x, y: torch.norm(x - y, p=1),
+    "cosine": lambda x, y: torch.nn.functional.cosine_similarity(x, y, dim=0),
+}
+
+def _distance_from_seed_model_dictionary_dataset_distribution_metrics(
+    seed_model: nn.Module, 
+    seed_model_train_dataloader: DataLoader, 
+    dictionary_dataset: DictionaryDataset, 
+    device: str,
+    distance_function: Literal["l2", "l1", "cosine"],
+    metrics: List[DatasetMetrics],
+    labels: Optional[List[int]] = None
+) -> Dict[DatasetMetrics, Float[np.ndarray, "n_datapoints"]]:
+
+    if "label_projected" in metrics and labels is None:
+        raise ValueError("labels must be provided if label_projected is in metrics")
     
+    seed_model_datapoint = (seed_model.flatten(), _create_vectorized_model_function(seed_model, seed_model_train_dataloader, device))
+    distance_function = DISTANCE_FUNCTION_DICT[distance_function]
+
+    out = dict()
+    for metric in metrics:
+        if metric == "weight":
+            out[metric] = np.array([abs(distance_function(model_flattened.to(device), seed_model_datapoint[0])).cpu().item() for model_flattened, _ in dictionary_dataset])
+        elif metric == "function":
+            out[metric] = np.array([abs(distance_function(label.to(device), seed_model_datapoint[1])).cpu().item() for _, label in dictionary_dataset])
+        elif metric == "label_projected":
+            raise NotImplementedError("This function is not implemented")
+        elif metric == "loss":
+            raise NotImplementedError("This function is not implemented")
+
     return out
+
+
+def _plot_dataset_metrics(metrics: Dict[DatasetMetrics, Float[np.ndarray, "n_datapoints"]], distance_function: Literal["l2", "l1", "cosine"], title: str, xlabel: str, ylabel: str, save_dir: Optional[pathlib.Path] = None, show: bool = False):
+    if not show and save_dir is None:
+        raise ValueError("At least one of show or save must be True")
+
+    for metric, data in metrics.items():
+        plt.hist(data, bins=100, density=True)
+        plt.title(f"{metric} {distance_function} {title}")
+        plt.xlabel(xlabel)
+        plt.ylabel(ylabel)
+
+        if show:
+            plt.show()
+        if save_dir is not None:
+            save_dir.mkdir(parents=True, exist_ok=True)
+            plt.savefig(save_dir / f"{metric}_{distance_function}_{title}.png")
+        plt.close()
 
 
 def _evaluate_dictionary(autoencoder: nn.Module, train_dataloader: DataLoader, eval_dataloader: DataLoader, num_labels: int, device: str) -> float: # TODO: Add a parameter for top logit vs. full 
@@ -172,4 +208,17 @@ if __name__ == "__main__":
         num_steps=2
     )
 
-    main(mlp_config, topk_dictionary_config, mlp_train_config, topk_dictionary_train_config, sgld_config, n_models=10, n_devices=10)
+    # main(mlp_config, topk_dictionary_config, mlp_train_config, topk_dictionary_train_config, sgld_config, n_models=10, n_devices=10)
+    
+    # Load trained MLP model
+    mlp = MLP(mlp_config)
+    mlp.load_state_dict(torch.load("/home/lucas/qft-nn/temporary_datasets/mlp_state_dict.pt"))
+    mlp = mlp.to("cuda" if torch.cuda.is_available() else "cpu")
+
+    dictionary_train_dataset = DictionaryDataset.load_from_file(pathlib.Path("/home/lucas/qft-nn/temporary_datasets/dictionary_train_dataset.pt"))
+    dictionary_eval_dataset = DictionaryDataset.load_from_file(pathlib.Path("/home/lucas/qft-nn/temporary_datasets/dictionary_eval_dataset.pt"))
+
+    mnist_train_dataloader, mnist_eval_dataloader = _create_mnist_dataloaders(batch_size=10, shuffle=True)
+
+    metrics = _distance_from_seed_model_dictionary_dataset_distribution_metrics(seed_model=mlp, seed_model_train_dataloader=mnist_train_dataloader, dictionary_dataset=dictionary_train_dataset, distance_function="l2", device="cuda", metrics=["weight", "function"], labels=None)
+    _plot_dataset_metrics(metrics, distance_function="l2", title="Distance from seed model", xlabel="Distance", ylabel="Frequency", save_dir=pathlib.Path("/home/lucas/qft-nn/temporary_datasets/"), show=True)
