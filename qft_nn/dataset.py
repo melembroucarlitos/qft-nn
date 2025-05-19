@@ -6,6 +6,8 @@ import numpy as np
 import torch.nn as nn
 import time
 from torchvision import datasets, transforms
+from torch.serialization import safe_globals
+from torch.utils.data import Subset
 
 from qft_nn.sgld import _sgld_parallel, SGLDConfig
 from qft_nn.models import MLP, MLPConfig, TrainConfig
@@ -39,7 +41,12 @@ class DictionaryDataset(Dataset):
 
     @classmethod
     def load_from_file(cls, file_path: pathlib.Path) -> "DictionaryDataset":
-        return cls(torch.load(file_path))
+        # When loading a saved dataset, we need to ensure the Subset class is available
+        # in the global namespace for proper deserialization. The safe_globals context
+        # manager temporarily adds Subset to the global namespace during loading.
+        with safe_globals([Subset]):
+            return cls(torch.load(file_path, weights_only=False))
+
 
     def save_to_file(self, file_path: pathlib.Path):
         torch.save(self.data, file_path)
@@ -176,3 +183,9 @@ if __name__ == "__main__":
     )
     
     _create_and_save_dataset(mlp_config, mlp_train_config, sgld_config, 10, 0.8, "cuda", pathlib.Path("/home/lucas/qft-nn/temporary_datasets"))
+
+    dictionary_train_dataset = DictionaryDataset.load_from_file(pathlib.Path("/home/lucas/qft-nn/temporary_datasets/dictionary_train_dataset.pt"))
+    dictionary_eval_dataset = DictionaryDataset.load_from_file(pathlib.Path("/home/lucas/qft-nn/temporary_datasets/dictionary_eval_dataset.pt"))
+
+    print(len(dictionary_train_dataset))
+    print(len(dictionary_eval_dataset))
