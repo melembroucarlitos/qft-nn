@@ -52,15 +52,44 @@ class DictionaryDataset(Dataset):
         torch.save(self.data, file_path)
 
 def _create_vectorized_model_function(model: nn.Module, dataloader: DataLoader, device: str) -> torch.Tensor:
+       # Check CUDA availability and set device
+    if device == "cuda":
+        if not torch.cuda.is_available():
+            print("CUDA not available, falling back to CPU")
+            device = "cpu"
+        else:
+            # Clear CUDA cache and reset device
+            torch.cuda.empty_cache()
+            try:
+                # Test CUDA with a small tensor
+                test_tensor = torch.zeros(1).to(device)
+                del test_tensor
+            except RuntimeError as e:
+                print(f"CUDA test failed: {e}")
+                print("Falling back to CPU")
+                device = "cpu"
+    
     out = []
+    model = model.to(device)  # Move model to device first
     model.eval()
+    
     with torch.no_grad():
-        for data, label in dataloader:
-            data, label = data.to(device), label.to(device)
-            logits = model(data)
-            out.append(logits.detach().flatten())  # Detach the tensor
+        for data, _ in dataloader:
+            try:
+                data = data.to(device)
+                logits = model(data)
+                out.append(logits.detach().flatten())
+            except RuntimeError as e:
+                print(f"Error processing batch: {e}")
+                print("Falling back to CPU")
+                device = "cpu"
+                model = model.to(device)
+                data = data.to(device)
+                logits = model(data)
+                out.append(logits.detach().flatten())
+    
     return torch.cat(out)
-
+    
 def _create_mlp_to_vectorized_model_function_dataset(mlp: nn.Module, dataloader: DataLoader, sgld_config: SGLDConfig, n_models: int, train_eval_split: float, device: str) -> Tuple[DictionaryDataset, DictionaryDataset, DataLoader, DataLoader]:
     # Check CUDA availability and set device
     if device == "cuda" and not torch.cuda.is_available():
