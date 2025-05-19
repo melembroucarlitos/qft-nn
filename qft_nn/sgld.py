@@ -8,8 +8,8 @@ from typing import List
 from torch.utils.data import DataLoader
 
 from qft_nn.models import Optimizer, Criterion, OPTIMIZER_DICT, CRITERION_DICT
-
-class SGLDConfig(BaseModel):
+from qft_nn.config import ExperimentConfig
+class SGLDConfig(ExperimentConfig):
     learning_rate: float = 0.001
     batch_size: int = 64
     criterion: Criterion = "cross_entropy"

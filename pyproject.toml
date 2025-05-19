@@ -14,7 +14,9 @@ dependencies = [
     "torch",
     "numpy",
     "boto3",
-    "einops"
+    "einops",
+    "matplotlib",
+    "pyyaml"
 ]
 
 [project.optional-dependencies]

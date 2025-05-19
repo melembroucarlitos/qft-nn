@@ -11,6 +11,8 @@ from pydantic import BaseModel
 from abc import ABC, abstractmethod
 import einops
 
+from qft_nn.config import ExperimentConfig
+
 class SectionedCrossEntropy(nn.Module):
     def __init__(self, num_labels: int):
         super().__init__()
@@ -49,7 +51,7 @@ OPTIMIZER_DICT = {
     "sgd": torch.optim.SGD
 }
 
-class TrainConfig(BaseModel):
+class TrainConfig(ExperimentConfig):
     epochs: int = 10
     batch_size: int = 64
     learning_rate: float = 0.001
@@ -59,7 +61,7 @@ class TrainConfig(BaseModel):
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
     save_dir: Optional[pathlib.Path] = None
 
-class MLPConfig(BaseModel):
+class MLPConfig(ExperimentConfig):
     input_dim: int = 784
     hidden_layers: List[int] = [64, 32]
     output_dim: int = 10
@@ -185,7 +187,7 @@ class MLP(Model):
         return x
 
 
-class TopKDictionaryConfig(BaseModel):
+class TopKDictionaryConfig(ExperimentConfig):
     input_dim: int
     latent_dim: int
     output_dim: int
