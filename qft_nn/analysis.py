@@ -1,4 +1,4 @@
-from typing import List, Literal, Tuple, Optional
+from typing import List, Literal, Tuple, Optional, Dict
 import pathlib
 import torch
 import torch.nn as nn
@@ -12,92 +12,25 @@ import os
 
 from qft_nn.models import MLP, TopKDictionary, TopKDictionaryConfig, MLPConfig, TrainConfig, OPTIMIZER_DICT, CRITERION_DICT, Optimizer, Criterion
 from qft_nn.sgld import _sgld_parallel, SGLDConfig
+from qft_nn.dataset import _create_vectorized_model_function, _create_mlp_to_vectorized_model_function_dataset, DictionaryDataset
 
-os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
-
-class DictionaryDataset(Dataset):
-    def __init__(self, data: List[tuple]):
-        self.data = data
+DatasetMetrics = Literal["weight", "function", "label_projected", "loss"]
+def _analyze_dataset(seed_model: nn.Module, dataset: Dataset, device: str, metrics: List[DatasetMetrics]) -> Dict[DatasetMetrics, List[float]]:
+    raise NotImplementedError("This function is not implemented")
+    out = dict()
+    for x, y in dataset:
+        x, y = x.to(device), y.to(device)
+        if "weight" in metrics:
+            out["weight"].append(abs(x - seed_model.weight.detach().cpu().numpy()))
+        if "function" in metrics:
+            dataloader = DataLoader(dataset, batch_size=1, shuffle=False)
+            out["function"].append(abs(y - _create_vectorized_model_function(seed_model, dataset, device)))
+        if "label_projected" in metrics:
+            out["label_projected"].append(seed_model(x).argmax(dim=-1).detach().cpu().numpy())
+        if "loss" in metrics:
+            out["loss"].append(seed_model(x).detach().cpu().numpy())
     
-    def __len__(self):
-        return len(self.data)
-    
-    def __getitem__(self, idx):
-        return self.data[idx]
-
-def _create_vectorized_model_function(model: nn.Module, dataloader: DataLoader, device: str) -> torch.Tensor:
-    out = []
-    model.eval()
-    with torch.no_grad():
-        for data, label in dataloader:
-            data, label = data.to(device), label.to(device)
-            logits = model(data)
-            out.append(logits.detach().flatten())  # Detach the tensor
-    return torch.cat(out)
-
-def _create_mlp_to_vectorized_model_function_dataset(mlp: nn.Module, dataloader: DataLoader, sgld_config: SGLDConfig, n_models: int, train_eval_split: float, device: str, dir_path: Optional[pathlib.Path] = None) -> Tuple[DictionaryDataset, DictionaryDataset, DataLoader, DataLoader]:
-    start_time = time.time()
-    # Create n_models copies of the MLP
-    models = [MLP(mlp.config).to(device) for _ in range(n_models)]
-    # Copy weights from the original MLP to all copies
-    for model in models:
-        model.load_state_dict(mlp.state_dict())
-    
-    # Run parallel SGLD
-    models = _sgld_parallel(models, dataloader, device, sgld_config)
-    print(f"Total SGLD sampling took {time.time() - start_time:.2f} seconds")
-    
-    # Process models in batches on GPU
-    with torch.no_grad():
-        # First get flattened parameters for all models
-        flattened_models = torch.stack([model.flatten() for model in models])
-        
-        # Process full dataset through all models in smaller batches
-        vectorized_outputs = []
-        batch_size = n_models  # Process 8 models at a time to manage memory
-        
-        for model_batch_idx in range(0, len(models), batch_size):
-            # Get current batch of models
-            model_batch = models[model_batch_idx:model_batch_idx + batch_size]
-            batch_outputs = []
-            
-            # Run each batch of models through the full dataset
-            for data, _ in dataloader:
-                data = data.to(device)
-                # Forward pass through batch of models simultaneously
-                outputs = torch.stack([model(data).detach().flatten() for model in model_batch])
-                batch_outputs.append(outputs)
-                
-                # Clear cache after each batch to manage memory
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-            
-            # Concatenate all batches for this group of models
-            model_outputs = torch.cat(batch_outputs, dim=1)  # Concatenate along feature dimension
-            vectorized_outputs.append(model_outputs)
-            
-            # Clear cache after processing each model batch
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-        
-        # Stack outputs from all model batches
-        vectorized_models = torch.cat(vectorized_outputs, dim=0)
-        
-        # Create training data pairs
-        autoencoder_training_data = list(zip(flattened_models, vectorized_models))
-
-    train_size = int(train_eval_split * len(autoencoder_training_data))
-    eval_size = len(autoencoder_training_data) - train_size
-    train_data, eval_data = torch.utils.data.random_split(
-        autoencoder_training_data, 
-        [train_size, eval_size]
-    )
-
-    if dir_path is not None:
-        torch.save(train_data, dir_path / "autoencoder_train_dataset.pt")
-        torch.save(eval_data, dir_path / "autoencoder_eval_dataset.pt")
-
-    return DictionaryDataset(train_data), DictionaryDataset(eval_data)
+    return out
 
 
 def _evaluate_dictionary(autoencoder: nn.Module, train_dataloader: DataLoader, eval_dataloader: DataLoader, num_labels: int, device: str) -> float: # TODO: Add a parameter for top logit vs. full 
@@ -147,7 +80,6 @@ def _evaluate_dictionary(autoencoder: nn.Module, train_dataloader: DataLoader, e
     print(f"Eval accuracy: {eval_out['accuracies']}")
 
     return train_out, eval_out
-
 
 def main(
     mlp_config: MLPConfig,
