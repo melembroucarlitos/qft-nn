@@ -20,10 +20,10 @@ def _create_mnist_dataloaders(batch_size: int, shuffle: bool) -> Tuple[DataLoade
         transforms.Lambda(lambda x: x.flatten())  # Flatten the image
     ])
     
-    train_dataset = datasets.MNIST('./data', train=True, download=True, transform=transform)
+    train_dataset = datasets.MNIST('./data', train=True, download=False, transform=transform)
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=shuffle)
 
-    eval_dataset = datasets.MNIST('./data', train=False, download=True, transform=transform)
+    eval_dataset = datasets.MNIST('./data', train=False, download=False, transform=transform)
     eval_dataloader = DataLoader(eval_dataset, batch_size=batch_size, shuffle=shuffle)
     
     return train_dataloader, eval_dataloader
