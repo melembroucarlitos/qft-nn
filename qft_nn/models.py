@@ -59,7 +59,8 @@ class TrainConfig(ExperimentConfig):
     optimizer: Optimizer = "adam"
     criterion: Criterion = "cross_entropy"
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
-    save_dir: Optional[pathlib.Path] = None
+    model_save_path: Optional[pathlib.Path] = None
+    config_save_path: Optional[pathlib.Path] = None
 
 class MLPConfig(ExperimentConfig):
     input_dim: int = 784
@@ -94,22 +95,16 @@ class Model(ABC, nn.Module):
         train_loader: DataLoader,
         test_loader: DataLoader,
         eval_metric: str = "accuracy",
-        save_dir: Optional[pathlib.Path] = None
+        model_save_path: Optional[pathlib.Path] = None,
+        config_save_path: Optional[pathlib.Path] = None
     ) -> List[float]:
-        if save_dir is not None and save_dir.exists():
-            raise FileExistsError(f"Save directory already exists at {save_dir}")
+        # if save_dir is not None and save_dir.exists():
+        #     raise FileExistsError(f"Save directory already exists at {save_dir}")
 
         model = self.to(config.device)
 
         optimizer = OPTIMIZER_DICT[config.optimizer](self.parameters(), lr=config.learning_rate)
         criterion = CRITERION_DICT[config.criterion]
-
-        if save_dir is not None:
-            save_dir.mkdir(parents=True, exist_ok=False)
-            # Save train config
-            config_path = save_dir / "train_config.json"
-            with open(config_path, "w") as f:
-                f.write(config.json())
 
         losses = []
         eval_metric_values = []
@@ -132,12 +127,7 @@ class Model(ABC, nn.Module):
                     eval_metric_value = self.evaluate(test_loader, config.device, eval_metric, criterion)
                     eval_metric_values.append(eval_metric_value)
                     print(f'Epoch {epoch+1}/{config.epochs}, Batch {batch_idx}/{len(train_loader)}, Loss: {loss.item():.4f}, Eval {eval_metric}: {eval_metric_value:.4f}')
-                    
-                    if save_dir is not None:
-                        # Save model checkpoint
-                        model_path = save_dir / f"model_epoch{epoch+1}_batch{batch_idx}.pt"
-                        torch.save(self.state_dict(), model_path)
-                    
+                                        
                     # Switch back to train mode
                     model.train()
             
@@ -145,11 +135,16 @@ class Model(ABC, nn.Module):
             losses.append(avg_loss)
             print(f'Epoch {epoch+1}/{config.epochs}, Loss: {avg_loss:.4f}')
             
-            if save_dir is not None:
-                # Save model after each epoch
-                model_path = save_dir / f"model_epoch{epoch+1}.pt"
-                torch.save(self.state_dict(), model_path)
-                
+        if model_save_path is not None:
+            # Save model after each epoch
+            torch.save(self.state_dict(), model_save_path)
+
+        if config_save_path is not None:
+            # Save train config
+            with open(config_save_path, "w") as f:
+                f.write(config.json())
+
+
         return losses, eval_metric_values
     
     def evaluate(self, test_loader: DataLoader, device: str, metric: str, criterion: Criterion) -> float:

@@ -7,13 +7,27 @@ class ExperimentConfig(BaseModel, ABC):
     def save(self, path: pathlib.Path):
         # Create parent directories if they don't exist
         path.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Convert model to dict and handle pathlib.Path objects
+        # HOTFIX
+        config_dict = self.model_dump()
+        for key, value in config_dict.items():
+            if isinstance(value, pathlib.Path):
+                config_dict[key] = str(value)
+        
         with open(path, "w") as f:
-            yaml.safe_dump(self.model_dump(), f)
+            yaml.safe_dump(config_dict, f)
 
     @classmethod
     def load(cls, path: pathlib.Path):
         with open(path, "r") as f:
-            return cls(**yaml.safe_load(f))
+            config_dict = yaml.safe_load(f)
+            # Convert string paths back to pathlib.Path objects
+            # HOTFIX
+            for key, value in config_dict.items():
+                if isinstance(value, str) and key.endswith('_path') or key == 'save_dir':
+                    config_dict[key] = pathlib.Path(value)
+            return cls(**config_dict)
 
 if __name__ == "__main__":
     from qft_nn.models import MLPConfig, TrainConfig

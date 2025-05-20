@@ -21,6 +21,12 @@ DISTANCE_FUNCTION_DICT = {
     "cosine": lambda x, y: torch.nn.functional.cosine_similarity(x, y, dim=0),
 }
 
+class DictionaryDatasetAnalysisConfig(BaseModel):
+    plots_save_dir: Optional[pathlib.Path] = None
+    metrics: List[str] = ["weight", "function"]
+    distance_function: str = "l2"
+    labels: Optional[List[str]] = None
+
 def _distance_from_seed_model_dictionary_dataset_distribution_metrics(
     seed_model: nn.Module, 
     seed_model_train_dataloader: DataLoader, 
@@ -37,16 +43,19 @@ def _distance_from_seed_model_dictionary_dataset_distribution_metrics(
     seed_model_datapoint = (seed_model.flatten(), _create_vectorized_model_function(seed_model, seed_model_train_dataloader, device))
     distance_function = DISTANCE_FUNCTION_DICT[distance_function]
 
-    out = dict()
-    for metric in metrics:
-        if metric == "weight":
-            out[metric] = np.array([abs(distance_function(model_flattened.to(device), seed_model_datapoint[0])).cpu().item() for model_flattened, _ in dictionary_dataset])
-        elif metric == "function":
-            out[metric] = np.array([abs(distance_function(label.to(device), seed_model_datapoint[1])).cpu().item() for _, label in dictionary_dataset])
-        elif metric == "label_projected":
-            raise NotImplementedError("This function is not implemented")
-        elif metric == "loss":
-            raise NotImplementedError("This function is not implemented")
+    out = dict(weight=[], function=[], loss=[], label_projected={0: [], 1: [], 2: [], 3: [], 4: [], 5: [], 6: [], 7: [], 8: [], 9: []})
+    
+    if "weight" in metrics:
+        out["weight"] = np.array([abs(distance_function(model_flattened.to(device), seed_model_datapoint[0])).cpu().item() for model_flattened, _ in dictionary_dataset])
+    if "function" in metrics:
+        out["function"] = np.array([abs(distance_function(label.to(device), seed_model_datapoint[1])).cpu().item() for _, label in dictionary_dataset])
+    if "loss" in metrics:
+        raise NotImplementedError("This function is not implemented")
+    if "label_projected" in metrics:
+        function_vector = out["function"].reshape(-1, 10)
+        for label in labels:
+            projected_function_vector = function_vector[:, label]
+            out["label_projected"][label] = projected_function_vector
 
     return out
 
@@ -68,6 +77,9 @@ def _plot_dataset_metrics(metrics: Dict[DatasetMetrics, Float[np.ndarray, "n_dat
             plt.savefig(save_dir / f"{metric}_{distance_function}_{title}.png")
         plt.close()
 
+class DictionaryAnalysisConfig(BaseModel):
+    num_labels: int
+    output_dir: pathlib.Path
 
 def _evaluate_dictionary(autoencoder: nn.Module, train_dataloader: DataLoader, eval_dataloader: DataLoader, num_labels: int, device: str) -> float: # TODO: Add a parameter for top logit vs. full 
     def _evaluate_dictionary_on_dataloader(autoencoder: nn.Module, dataloader: DataLoader, num_labels: int, device: str) -> dict: # TODO: Create a dataclass for evals
@@ -110,12 +122,24 @@ def _evaluate_dictionary(autoencoder: nn.Module, train_dataloader: DataLoader, e
             out["accuracies"] = sum(accuracies) / len(accuracies)
             return out
     
+    if device == "cuda" and not torch.cuda.is_available():
+        print("CUDA not available, falling back to CPU")
+        device = "cpu"
+    
+    # Clear CUDA cache before starting
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    
+
     train_out = _evaluate_dictionary_on_dataloader(autoencoder, train_dataloader, num_labels, device)
     print(f"Train accuracy: {train_out['accuracies']}")
     eval_out = _evaluate_dictionary_on_dataloader(autoencoder, eval_dataloader, num_labels, device)
     print(f"Eval accuracy: {eval_out['accuracies']}")
 
     return train_out, eval_out
+
+def _analyze_topk_dictionary_learned_circuits(topk_dictionary: TopKDictionary, device: str):
+    raise NotImplementedError("This function is not implemented")
 
 def main(
     mlp_config: MLPConfig,
@@ -177,17 +201,6 @@ if __name__ == "__main__":
         device="cuda" if torch.cuda.is_available() else "cpu"
     )
 
-    topk_dictionary_config = TopKDictionaryConfig(
-        input_dim=101770,
-        latent_dim=128,
-        output_dim=600000,
-        k=10,
-        activation="relu",
-        encoder_bias=True,
-        decoder_bias=True,
-        input_center=None,
-        output_center=None
-    )
     
     topk_dictionary_train_config = TrainConfig(
         epochs=5,
@@ -220,5 +233,40 @@ if __name__ == "__main__":
 
     mnist_train_dataloader, mnist_eval_dataloader = _create_mnist_dataloaders(batch_size=10, shuffle=True)
 
-    metrics = _distance_from_seed_model_dictionary_dataset_distribution_metrics(seed_model=mlp, seed_model_train_dataloader=mnist_train_dataloader, dictionary_dataset=dictionary_train_dataset, distance_function="l2", device="cuda", metrics=["weight", "function"], labels=None)
-    _plot_dataset_metrics(metrics, distance_function="l2", title="Distance from seed model", xlabel="Distance", ylabel="Frequency", save_dir=pathlib.Path("/home/lucas/qft-nn/temporary_datasets/"), show=True)
+    # metrics = _distance_from_seed_model_dictionary_dataset_distribution_metrics(seed_model=mlp, seed_model_train_dataloader=mnist_train_dataloader, dictionary_dataset=dictionary_train_dataset, distance_function="l2", device="cuda", metrics=["weight", "function"], labels=None)
+    # _plot_dataset_metrics(metrics, distance_function="l2", title="Distance from seed model", xlabel="Distance", ylabel="Frequency", save_dir=pathlib.Path("/home/lucas/qft-nn/temporary_datasets/"), show=True)
+
+    dictionary_train_dataloader = DataLoader(
+        dictionary_train_dataset,
+        batch_size=topk_dictionary_train_config.batch_size,
+        shuffle=True
+    )
+    dictionary_eval_dataloader = DataLoader(
+        dictionary_eval_dataset,
+        batch_size=topk_dictionary_train_config.batch_size,
+        shuffle=False  # No need to shuffle evaluation data
+    )
+
+    topk_dictionary_config = TopKDictionaryConfig(
+        input_dim=101770,
+        latent_dim=128,
+        output_dim=600000,
+        k=10,
+        activation="relu",
+        encoder_bias=True,
+        decoder_bias=False,
+        input_center=mlp.flatten(),
+        output_center=_create_vectorized_model_function(mlp, mnist_train_dataloader, device="cuda")
+    )
+
+    topk_dictionary = TopKDictionary(topk_dictionary_config)
+    topk_dictionary.load_state_dict(torch.load("/home/lucas/qft-nn/temporary_datasets/topk_dictionary_state_dict.pt"))
+    topk_dictionary.to(device="cuda" if torch.cuda.is_available() else "cpu")
+    # topk_dictionary.optimize(topk_dictionary_train_config, dictionary_train_dataloader, dictionary_eval_dataloader)
+    # torch.save(topk_dictionary.state_dict(), pathlib.Path("/home/lucas/qft-nn/temporary_datasets/topk_dictionary_state_dict.pt"))
+
+    topk_evals = _evaluate_dictionary(topk_dictionary, dictionary_train_dataloader, dictionary_eval_dataloader, num_labels=10, device="cuda")
+    with open(pathlib.Path("/home/lucas/qft-nn/temporary_datasets/topk_evals.pkl"), "wb") as f:
+        pickle.dump(topk_evals, f)
+
+    learned_circuits = topk_dictionary.decoder.weight.T

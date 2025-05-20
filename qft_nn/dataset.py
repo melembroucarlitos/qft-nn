@@ -11,6 +11,7 @@ from torch.utils.data import Subset
 
 from qft_nn.sgld import _sgld_parallel, SGLDConfig
 from qft_nn.models import MLP, MLPConfig, TrainConfig
+from qft_nn.config import ExperimentConfig
 
 def _create_mnist_dataloaders(batch_size: int, shuffle: bool) -> Tuple[DataLoader, DataLoader]:
     # Load MNIST dataset
@@ -20,10 +21,10 @@ def _create_mnist_dataloaders(batch_size: int, shuffle: bool) -> Tuple[DataLoade
         transforms.Lambda(lambda x: x.flatten())  # Flatten the image
     ])
     
-    train_dataset = datasets.MNIST('./data', train=True, download=False, transform=transform)
+    train_dataset = datasets.MNIST('./data', train=True, download=True, transform=transform)
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=shuffle)
 
-    eval_dataset = datasets.MNIST('./data', train=False, download=False, transform=transform)
+    eval_dataset = datasets.MNIST('./data', train=False, download=True, transform=transform)
     eval_dataloader = DataLoader(eval_dataset, batch_size=batch_size, shuffle=shuffle)
     
     return train_dataloader, eval_dataloader
@@ -51,7 +52,19 @@ class DictionaryDataset(Dataset):
     def save_to_file(self, file_path: pathlib.Path):
         torch.save(self.data, file_path)
 
-def _create_vectorized_model_function(model: nn.Module, dataloader: DataLoader, device: str) -> torch.Tensor:
+class DatasetGenerationConfig(ExperimentConfig):
+    mlp_config: MLPConfig
+    mlp_train_config: TrainConfig
+    sgld_config: SGLDConfig
+    n_models: int
+    train_eval_split: float
+    output_dir: pathlib.Path
+
+def _create_vectorized_model_function(
+        model: nn.Module, 
+        dataloader: DataLoader, 
+        device: str
+) -> torch.Tensor: # TODO: jaxtyping
        # Check CUDA availability and set device
     if device == "cuda":
         if not torch.cuda.is_available():
@@ -161,28 +174,21 @@ def _create_mlp_to_vectorized_model_function_dataset(mlp: nn.Module, dataloader:
 
     return DictionaryDataset(train_data), DictionaryDataset(eval_data)
 
-def _create_and_save_dataset(mlp_config: MLPConfig, mlp_train_config: TrainConfig, sgld_config: SGLDConfig, n_models: int, train_eval_split: float, device: str, dir_path: pathlib.Path) -> Tuple[DictionaryDataset, DictionaryDataset]:
-    mnist_train_dataloader, mnist_eval_dataloader = _create_mnist_dataloaders(batch_size=10, shuffle=True)
+def _create_and_save_dataset(seed_model: nn.Module, sgld_config: SGLDConfig, n_models: int, train_eval_split: float, device: str, dir_path: pathlib.Path) -> Tuple[DictionaryDataset, DictionaryDataset]:
+    mnist_train_dataloader, _ = _create_mnist_dataloaders(batch_size=10, shuffle=True)
 
-    mlp = MLP(mlp_config)
-    mlp.optimize(mlp_train_config, mnist_train_dataloader, mnist_eval_dataloader)
-
-    dir_path.mkdir(parents=True, exist_ok=True) # Create directory if it doesn't exist
-    torch.save(mlp.state_dict(), dir_path / "mlp_state_dict.pt")
-
-    dictionary_train_dataset, dictionary_eval_dataset = _create_mlp_to_vectorized_model_function_dataset(mlp=mlp,
+    dictionary_train_dataset, dictionary_eval_dataset = _create_mlp_to_vectorized_model_function_dataset(mlp=seed_model,
                                                                                                          dataloader=mnist_train_dataloader, 
                                                                                                          sgld_config=sgld_config, 
                                                                                                          n_models=n_models, 
                                                                                                          train_eval_split=train_eval_split, 
-                                                                                                         device=mlp_train_config.device)
+                                                                                                         device=device)
     
     torch.save(dictionary_train_dataset.data, dir_path / "dictionary_train_dataset.pt")
     torch.save(dictionary_eval_dataset.data, dir_path / "dictionary_eval_dataset.pt")
-
-    mlp_config.save(pathlib.Path(dir_path / "mlp_config.yaml"))
-    mlp_train_config.save(pathlib.Path(dir_path / "mlp_train_config.yaml"))
     sgld_config.save(pathlib.Path(dir_path / "sgld_config.yaml"))
+
+    return dictionary_train_dataset, dictionary_eval_dataset
 
 if __name__ == "__main__":
     

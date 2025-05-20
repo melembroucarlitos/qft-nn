@@ -4,3 +4,5 @@
 qft_nn.egg-info
 data/
 **/__pycache__
+.vscode
+artifacts/
